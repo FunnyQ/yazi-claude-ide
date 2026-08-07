@@ -1,6 +1,6 @@
 # Yazi Claude Code IDE Plugin — PLAN
 
-> Teach Claude Code's `/ide` to recognise yazi (a terminal file manager) the way it recognises VS Code or Neovim, so it can pull context such as the currently selected file. Status: task #1 complete, task #2 not started.
+> Teach Claude Code's `/ide` to recognise yazi (a terminal file manager) the way it recognises VS Code or Neovim, so it can pull context such as the currently selected file. Status: tasks #1 and #2 complete, both gates passed. Task #3 not started.
 
 ## Context
 
@@ -34,11 +34,23 @@ Four findings that overturned the original assumptions:
 3. **`/ide` adopts a connection based on the workspace matching, not on the tool set.** Completing the WebSocket handshake does not mean the CLI treats the connection as the active IDE. When the lock file's `workspaceFolders` does not match the Claude session's cwd, the picker still lists the IDE, but selecting it prints `IDE selection cancelled` — **while the socket has in fact completed a full handshake and stays open**, with pushes delivered and ignored. The isolation experiment (workspace matching, advertised tools cut from 11 to 4, handlers unchanged) produced `Connected to yazi.`, proving the tool count is irrelevant.
 4. **The MCP tools the CLI forwards to the agent track `tools/list`.** Advertising `getDiagnostics` makes `mcp__ide__getDiagnostics` appear on the agent side; dropping it makes the tool disappear. But Claude still calls tools that were never advertised — `closeAllDiffTabs` is called on every connection — so the advertised list governs what the agent can see, not what the CLI will call.
 
+## yazi-capability-spike result (2026-08-07, passed)
+
+The second go/no-go gate **passed**. Full measurements are in [docs/yazi-capability.md](docs/yazi-capability.md) and [spike/yazi/README.md](spike/yazi/README.md).
+
+**Decision: a sidecar is required, and the yazi plugin launches it.**
+
+1. **A Lua plugin cannot own a long-lived child.** `Command:spawn()` returns a valid child and a nil error, then the process never runs — not even an instant `date >> file`. Holding the handle in a global changes nothing, so this is not handle-drop: the async plugin VM is destroyed when `entry` returns and takes its children with it. `:status()` and `:output()` work, because they block inside the same call. This kills the "Lua plugin owns the WebSocket server" option outright.
+2. **A double-forked child survives, and survives too much.** `sh -c 'nohup … &'` launched via `:status()` outlives both a normal quit and `SIGKILL` of yazi. The sidecar must therefore terminate itself; nothing will do it.
+3. **`ya sub` already carries the MVP payload, with no plugin involved.** Any process can run `ya sub hover,cd` and receive `{"tab":N,"url":"…"}` per event. Since the spike proved the MVP only needs a path, the plugin's one indispensable job is launching the sidecar — everything else can come off the DDS stream.
+4. **`YAZI_ID` is inherited by plugin-spawned processes.** This is what makes the split work: `ya sub` is global across every yazi on the machine, and the sidecar can only filter its own instance's events because the plugin handed it `YAZI_ID`. A sidecar started any other way cannot.
+5. **`ya emit-to` + `ya sub` make yazi fully drivable headlessly**, unlike the Claude Code side. `spike/yazi/harness.sh` scripts the whole loop. Task #6's checklist can be automated on the yazi half.
+
 ## Open questions (needed before implementation)
 
 1. **How does selection map?** yazi has no cursor and no text selection, only a list of marked files and a currently focused file. Settled: the MVP recognises only the focused regular file (see MVP scope below).
 2. **What are "open editors"?** yazi has no tabbed editor, only a preview pane. Settled: skipped in the MVP rather than guessing at semantics.
-3. **Implementation language and architecture:** deferred. Whether a Rust sidecar is needed depends on `yazi-capability-spike` (task #2) determining whether a yazi Lua plugin can manage a long-lived process and its IPC on its own. If it can, no sidecar.
+3. ~~**Implementation language and architecture:** deferred.~~ **Settled by task #2: a sidecar is required.** A Lua plugin cannot hold a process open past one `entry` call, so it cannot own the WebSocket server. The plugin double-forks the sidecar, which inherits `YAZI_ID`; the sidecar owns the lock file, the server, and the state stream. Language for the sidecar is open — `spike/fake-ide.ts` is a working bun/TypeScript reference, and bun is already a project dependency.
 4. **MVP scope:** settled as `getCurrentSelection` + `getWorkspaceFolders` + **the `selection_changed` push** (the push is required, or Claude receives nothing). Advertising only a few tools has been verified not to affect `/ide` adoption, so excluding the rest is safe. Benign responses are still needed for tools that go unadvertised but get called anyway — at minimum `closeAllDiffTabs`. Whether `text` carries file contents is a product choice, not a technical constraint.
 5. **Are diagnostics meaningful here?** Settled: no. yazi is not an editor and has no LSP, so `getDiagnostics` and `openDiff` are excluded from v1 entirely.
 
@@ -50,26 +62,35 @@ Four findings that overturned the original assumptions:
 - A workspace folder is defined as yazi's cwd at plugin startup. Settled here rather than left to implementation; revisit only if the current tab's cwd proves necessary.
 - Normalise all paths. Treat symlinks and files outside the workspace as valid input and return them directly, rather than designing unverified boundary rules up front.
 
-## Architecture draft (pending spike, not locked)
+## Architecture (settled by task #2)
 
 ```
-yazi (Lua plugin)
-  │  selection state changes (yazi sync/event API)
+yazi
+  │  Lua plugin, on first invocation only:
+  │  double-forks the sidecar, which inherits YAZI_ID
   ▼
-sidecar process (Rust or a light script)
-  │  owns the lock file + WebSocket server + JSON-RPC dispatch
+sidecar process
+  ▲  owns the lock file + WebSocket server + MCP dispatch
+  │  ya sub hover,cd  ── filtered to its own YAZI_ID
+  │
+yazi DDS ── broadcasts hover/cd from every instance on the machine
+  │
   ▼
 Claude Code CLI (ws://127.0.0.1:<port>)
 ```
 
-- The Lua plugin detects yazi selection changes and syncs state to the sidecar over a unix socket or stdin/stdout.
-- The sidecar owns the lock file lifecycle (write on start, delete on exit), token generation, the WebSocket server, and responses to Claude's calls.
-- This split is itself an untested hypothesis, not a decision. Whether a sidecar is genuinely needed depends on the outcome of `yazi-capability-spike` (task #2).
+- The plugin's only indispensable job is launching the sidecar with `YAZI_ID` in scope. It cannot hold the process itself.
+- The sidecar reads state off `ya sub`, filtering on the `sender` field. It never needs a private IPC channel for the MVP payload, because `hover` and `cd` already carry the path.
+- The sidecar owns the lock file lifecycle, token generation, the WebSocket server, and responses to Claude's calls — the role `spike/fake-ide.ts` already fills.
+- On `cd`, the sidecar rewrites the lock file's `workspaceFolders`. This is how the workspace-drift constraint (Known gaps #5) gets handled.
+- **The sidecar must terminate itself.** A double-forked child outlives both a normal quit and `SIGKILL` of yazi, and DDS emits no departure event, so the sidecar has to poll for its yazi's absence.
+
+The IPC hop the earlier draft assumed (unix socket, stdin/stdout) is not needed for the MVP. If the plugin later has to send something DDS does not carry — marked files, file contents — `ps.pub_to(0, "<kind>", table)` delivers an arbitrary Lua table to the sidecar's `ya sub`, measured working.
 
 ## Task breakdown (in order; the first two are go/no-go gates — stop if either fails)
 
 1. ~~**protocol-spike**~~ — **complete, passed.** See "protocol-spike result" above.
-2. **yazi-capability-spike** — verify whether a yazi Lua plugin can start and manage a long-lived child process, covering tab switching, plugin reload, and the lifecycle when yazi exits normally or abnormally. Confirm that focus, marked files, current tab, and cwd can be read reliably. Must also verify whether the lock file can be rewritten live as yazi's cwd changes (see Known gaps #5). Output: the architectural decision on whether a sidecar is needed.
+2. ~~**yazi-capability-spike**~~ — **complete, passed.** See "yazi-capability-spike result" above.
 3. **contract** — turn the MVP semantic contract draft above into a testable specification: payload shapes, empty-value behaviour, workspace definition, error semantics.
 4. **protocol-core** — implement the lock file lifecycle, auth, WebSocket, and JSON-RPC dispatch, with contract tests.
 5. **yazi-binding** — wire up the focused file and workspace state, using a sidecar or not depending on the outcome of task #2.
@@ -84,14 +105,21 @@ Claude Code CLI (ws://127.0.0.1:<port>)
 - Both orderings work: Claude Code started first, and yazi started first.
 - The connection recovers after a WebSocket drop, and returns fresh data once yazi's state changes.
 - `/ide` finds yazi and the context updates after selecting a file. This was the original happy-path manual test; it is kept, but it is not the only verification.
+- The sidecar exits after its yazi does, under both normal quit and `SIGKILL`, leaving no lock file behind.
+
+The yazi half of this list can be automated: `ya emit-to` drives yazi and `ya sub` observes it, so `spike/yazi/harness.sh` scripts the whole loop headlessly. The Claude Code half cannot — `--ide` is interactive-only, per task #1.
 
 ## Known gaps
 
 1. The protocol has no official specification, and details may shift with Claude Code releases — claudecode.nvim is itself continuously chasing new behaviour. See the compatibility baseline above.
-2. Whether the yazi plugin API can run a long-lived background process is unverified, and is the largest technical risk `yazi-capability-spike` must answer.
+2. ~~Whether the yazi plugin API can run a long-lived background process is unverified~~ **Answered: it cannot.** See the capability spike result above. The risk moved rather than closed — the sidecar now outlives yazi instead, and cleaning it up is `resilience-validation` work.
 3. IDE semantics are inherently incomplete on yazi — no cursor, no LSP. This has to be accepted as a file-manager-grade integration, not a full IDE integration.
 4. ~~Whether returning a path from `getCurrentSelection` is enough~~ **Answered:** the path does appear in the context (`The user opened the file <path> in the IDE.`), but the file contents do not. Claude does not read the file once it has the path. To get contents into the context, the plugin must read the file and fill `text`.
-5. ~~The condition for `/ide` adopting a connection was not isolated~~ **Answered:** the condition is that the lock file's `workspaceFolders` matches the Claude session's cwd. A successful socket handshake does not imply adoption. Neither the CLI's failure message (`IDE selection cancelled`) nor a session's own account of its state is trustworthy — only the IDE-side server log is. **This is a real constraint for yazi:** yazi's cwd changes as the user navigates, while the lock file's workspace is fixed at startup. When and how those drift apart has to be handled in `yazi-binding`.
+5. ~~The condition for `/ide` adopting a connection was not isolated~~ **Answered:** the condition is that the lock file's `workspaceFolders` matches the Claude session's cwd. A successful socket handshake does not imply adoption. Neither the CLI's failure message (`IDE selection cancelled`) nor a session's own account of its state is trustworthy — only the IDE-side server log is. **Mechanism now settled:** the sidecar receives a `cd` event carrying the new cwd and rewrites the lock file. Measured working in task #2. What remains for `yazi-binding` is the policy — rewrite on every `cd`, or declare multiple workspace folders — not the capability.
+
+6. **The sidecar outlives yazi and nothing cleans it up.** A double-forked child survives normal quit and `SIGKILL`, and DDS emits no departure event — no `bye`, and no refreshed `hey` roster when a peer leaves. The sidecar must poll for its yazi's absence. Belongs to `resilience-validation`.
+
+7. **DDS server succession is untested.** The first yazi instance on the machine becomes the DDS server and later ones are clients. What happens to the surviving peers when the server instance exits was not measured, because testing it meant killing unrelated live yazi sessions. Affects the "two concurrent yazi instances" checklist item.
 
 ## Definition of done (MVP)
 
