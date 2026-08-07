@@ -1,0 +1,15 @@
+{"dir":"in","msg":{"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"roots":{"listChanged":true},"elicitation":{}},"clientInfo":{"name":"claude-code","title":"Claude Code","version":"2.1.223","description":"Anthropic's agentic coding tool","websiteUrl":"https://claude.com/claude-code"}},"jsonrpc":"2.0","id":0}}
+{"dir":"out","msg":{"jsonrpc":"2.0","id":0,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"yazi-claude-ide-spike","version":"0.0.0"}}}}
+{"dir":"in","msg":{"method":"notifications/initialized","jsonrpc":"2.0"}}
+{"dir":"in","msg":{"method":"ide_connected","params":{"pid":12345},"jsonrpc":"2.0"}}
+{"dir":"in","msg":{"method":"tools/list","jsonrpc":"2.0","id":1}}
+{"dir":"out","msg":{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"getCurrentSelection","description":"Get the current selection in the active editor","inputSchema":{"type":"object","properties":{}}},{"name":"getLatestSelection","description":"Get the most recent selection","inputSchema":{"type":"object","properties":{}}},{"name":"getOpenEditors","description":"Get information about currently open editors","inputSchema":{"type":"object","properties":{}}},{"name":"getWorkspaceFolders","description":"Get all workspace folders currently open in the IDE","inputSchema":{"type":"object","properties":{}}}]}}}
+{"dir":"out","msg":{"jsonrpc":"2.0","method":"selection_changed","params":{"text":"","filePath":"/workspace/spike/target.rb","fileUrl":"file:///workspace/spike/target.rb","selection":{"start":{"line":0,"character":0},"end":{"line":0,"character":0},"isEmpty":true}}}}
+{"dir":"in","msg":{"method":"tools/call","params":{"name":"closeAllDiffTabs","arguments":{},"_meta":{"progressToken":2}},"jsonrpc":"2.0","id":2}}
+{"dir":"out","msg":{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"CLOSED_0_DIFF_TABS"}]}}}
+{"dir":"in","msg":{"method":"tools/call","params":{"name":"closeAllDiffTabs","arguments":{},"_meta":{"progressToken":3}},"jsonrpc":"2.0","id":3}}
+{"dir":"out","msg":{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"CLOSED_0_DIFF_TABS"}]}}}
+{"dir":"in","msg":{"method":"tools/call","params":{"name":"closeAllDiffTabs","arguments":{},"_meta":{"progressToken":4}},"jsonrpc":"2.0","id":4}}
+{"dir":"out","msg":{"jsonrpc":"2.0","id":4,"result":{"content":[{"type":"text","text":"CLOSED_0_DIFF_TABS"}]}}}
+{"dir":"in","msg":{"method":"tools/call","params":{"name":"closeAllDiffTabs","arguments":{},"_meta":{"progressToken":5}},"jsonrpc":"2.0","id":5}}
+{"dir":"out","msg":{"jsonrpc":"2.0","id":5,"result":{"content":[{"type":"text","text":"CLOSED_0_DIFF_TABS"}]}}}
