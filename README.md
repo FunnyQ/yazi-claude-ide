@@ -2,9 +2,9 @@
 
 Yazi plugin that speaks Claude Code's `/ide` protocol, so Claude Code can pull context (currently focused/selected file) from [yazi](https://yazi-rs.github.io/) the same way it does from VS Code or Neovim.
 
-The sidecar is a single compiled Rust binary. There is no TypeScript and no bun
-at runtime. The plan, the protocol measurements, the spikes, and the manual
-harness live in `dev/`, which is local-only and not published.
+![Claude Code in one pane and yazi in another; Claude's prompt shows the file the yazi cursor sits on](assets/screenshot.png)
+
+The sidecar is a single compiled Rust binary.
 
 ## Setup
 
@@ -65,15 +65,20 @@ The plugin never reads a file itself. Claude does, when you submit.
 ## Development
 
 ```sh
-cargo test                                  # contract tests; each names the clause it covers
+cargo test
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 dev/manual/harness.sh verify                # the clauses only a real yazi can show
 ```
 
-`dev/` is absent from a fresh clone, so contributors will not have the manual harness or contract.
+[`dev/docs/contract.md`](dev/docs/contract.md) is the specification. Every
+automated test is named after the clause it covers, so `a5_server_binds_loopback_only`
+answers to clause A5. Change behaviour by changing the clause first.
 
-`dev/docs/contract.md` is the specification.
+[`dev/docs/baseline.md`](dev/docs/baseline.md) and
+[`dev/docs/yazi-capability.md`](dev/docs/yazi-capability.md) record the
+measurements the clauses rest on. `dev/spike/` holds the tools that took them;
+they run on bun and are not part of the build.
 
 ## License
 

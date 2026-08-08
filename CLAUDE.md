@@ -25,7 +25,7 @@ CI (`.github/workflows/ci.yml`) is three jobs: `check` runs `fmt`/`clippy`/`test
 
 Adding or changing behaviour means changing the contract first, then the test named for that clause.
 
-**`dev/` is gitignored.** A fresh clone has no contract, no measurements, no manual harness. If `dev/` is absent you cannot verify a behaviour claim — say so rather than guessing.
+**`dev/` is tracked, except `dev/PLAN.md`.** The contract, the measurements, the spikes, and the manual harness all ship in a fresh clone. `dev/PLAN.md` stays local because it is superseded and wrong — it still describes the push channel as `tokio::sync::broadcast`.
 
 - `dev/docs/contract.md` — the A–H specification
 - `dev/docs/baseline.md` — measurements behind F5, H4, the protocol version

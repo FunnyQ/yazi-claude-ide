@@ -3,9 +3,9 @@
 .cockpit/
 /target
 
-# Local development material: the plan, the measurement docs, the spikes, and
-# the manual harness. Present in a working copy, never published.
-dev/
+# Superseded by dev/docs/contract.md; kept locally because it still describes
+# the push channel as tokio::sync::broadcast, which the code never used.
+dev/PLAN.md
 
 # Flightplan/autopilot working material: plans, task trees, eval rubrics, and
 # the inlined contract copy the executors read. Scaffolding, not product.
