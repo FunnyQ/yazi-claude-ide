@@ -58,4 +58,31 @@ Reading the result:
 
 Terminal A's output shows which tools Claude actually called. That record is data regardless of the outcome.
 
+## Manual verification: marked files via `at_mentioned` (open)
+
+Answers the question that gates multi-select: **can more than one file reach the context at once?**
+
+`selection_changed` cannot carry a set — it is a single-slot state, and pushing it N times leaves only the last path. `at_mentioned` is the only other channel PROTOCOL.md documents, and it has never been measured against a real CLI. yazi cannot help here either: its DDS kinds are `hi hey bye cd tab bulk load move yank hover mount trash moveItem delete rename download duplicate duplicateItem`, with **no marking event**, so the yazi side must be an explicit keybinding regardless of the outcome.
+
+1. Terminal A: `bun spike/fake-ide.ts <workspace-dir>`.
+2. Terminal B: `cd <workspace-dir>`, run `claude`, `/ide`, pick `yazi`. Expect `Connected to yazi.`
+3. With the prompt empty and untouched, add two files to `state.json`:
+
+   ```json
+   { "filePath": "<workspace-dir>/PLAN.md", "mentions": ["<workspace-dir>/PLAN.md", "<workspace-dir>/README.md"] }
+   ```
+
+4. Watch the CLI's prompt line, then ask: `Answer without using any tools. Which files do you have in context right now?`
+
+Reading the result:
+
+| Outcome | Meaning |
+| --- | --- |
+| Both paths appear in the prompt or the context | Multi-select is buildable. `at_mentioned` is the channel. |
+| Only one appears | The CLI holds a single mention slot, same as `selection_changed`. Multi-select is not buildable through this channel. |
+| Neither appears, no error | `at_mentioned` is unimplemented in this CLI. Multi-select is not buildable at all. |
+| The prompt is corrupted or the CLI errors | Record it — an IDE that can break the user's typing is worse than one that cannot multi-select. |
+
+Also record whether the notification takes effect while the user is mid-typing, and whether `lineStart`/`lineEnd` of `0` is accepted for a whole-file mention.
+
 Do not trust what the Claude session says about its own connection state — it only repeats the CLI's message. `IDE selection cancelled` is printed both when a workspace mismatch blocks adoption (the socket has completed a full handshake and stays open) and when an already-connected session simply dismisses the picker. The IDE-side server log is the only ground truth.

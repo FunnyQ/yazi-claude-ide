@@ -76,7 +76,7 @@ It found a defect that had been shipping.
 > Superseded by [docs/contract.md](docs/contract.md), which is the testable form. The prose below stays as the reasoning behind it.
 
 - **Push `selection_changed` whenever focus changes.** This is the only channel that works. `getCurrentSelection` is still implemented in case Claude calls it, but measurement shows it will not.
-- The payload for both `getCurrentSelection` and the push represents only the currently focused regular file's path, excluding marked files. Multi-select waits until there is a demonstrated need, so the first version does not stretch a single-selection method into unverified multi-file semantics.
+- The payload for both `getCurrentSelection` and the push represents only the currently focused regular file's path, excluding marked files. ~~Multi-select waits until there is a demonstrated need, so the first version does not stretch a single-selection method into unverified multi-file semantics.~~ **Still true of `selection_changed`, which is a single-slot state and cannot carry a set. Marked files got their own channel instead — `at_mentioned`, one notification per file, on a keypress. See section H of the contract.**
 - **`text` is always the empty string.** The push is a pointer, not a transfer. This also means the sidecar never reads user files, which keeps the whole integration to path-shaped data.
 - When focus lands on a directory, or the file is missing or unreadable, return a well-defined empty or null result rather than raising a client error.
 - ~~A workspace folder is defined as yazi's cwd at plugin startup.~~ **Superseded. Settled: `workspaceFolders` holds two entries, an anchor and a cursor.**

@@ -370,3 +370,110 @@ describe("D. the selection_changed push", () => {
     expect((await client.next()).params).toMatchObject({ filePath: link });
   });
 });
+
+describe("H. the at_mentioned push", () => {
+  const DIR = path.join(REPO, "src");
+  const GONE = path.join(REPO, "no-such-file.txt");
+
+  test("H4 each marked file gets its own notification, params exactly filePath", async () => {
+    const sidecar = start();
+    const client = await Client.connect(sidecar);
+
+    sidecar.mention([FILE, OTHER]);
+    const first = await client.next();
+    expect(first.method).toBe("at_mentioned");
+    expect(first.id).toBeUndefined(); // a notification is never answered
+    // No lineStart/lineEnd: measured, `0` renders as `@file#L1` (baseline.md).
+    expect(first.params).toEqual({ filePath: FILE });
+    expect((await client.next()).params).toEqual({ filePath: OTHER });
+  });
+
+  test("H5 the notifications keep yazi's order", async () => {
+    const sidecar = start();
+    const client = await Client.connect(sidecar);
+
+    sidecar.mention([OTHER, FILE]);
+    expect((await client.next()).params).toEqual({ filePath: OTHER });
+    expect((await client.next()).params).toEqual({ filePath: FILE });
+  });
+
+  test("H6 a directory and a path that no longer stats are skipped", async () => {
+    const sidecar = start();
+    const client = await Client.connect(sidecar);
+
+    sidecar.mention([DIR, FILE, GONE]);
+    expect((await client.next()).params).toEqual({ filePath: FILE });
+    expect(await client.silence()).toBeNull();
+  });
+
+  test("H6 a set of only directories sends nothing", async () => {
+    const sidecar = start();
+    const client = await Client.connect(sidecar);
+
+    sidecar.mention([DIR]);
+    expect(await client.silence()).toBeNull();
+  });
+
+  test("H7 an empty set falls back to the focused file", async () => {
+    const sidecar = start();
+    sidecar.setFocus(FILE);
+    const client = await Client.connect(sidecar);
+    await client.next(); // the D3 selection_changed owed to this connection
+
+    sidecar.mention([]);
+    expect((await client.next()).params).toEqual({ filePath: FILE });
+  });
+
+  test("H7 an empty set with nothing focused sends nothing", async () => {
+    const sidecar = start();
+    const client = await Client.connect(sidecar);
+
+    sidecar.mention([]);
+    expect(await client.silence()).toBeNull();
+  });
+
+  test("H8 a gesture with no connection open is not queued for replay", async () => {
+    const sidecar = start();
+    sidecar.mention([FILE, OTHER]);
+
+    const client = await Client.connect(sidecar);
+    expect(await client.silence()).toBeNull();
+  });
+
+  test("H9 every open connection receives the set", async () => {
+    const sidecar = start();
+    const first = await Client.connect(sidecar);
+    const second = await Client.connect(sidecar);
+
+    sidecar.mention([FILE]);
+    expect((await first.next()).params).toEqual({ filePath: FILE });
+    expect((await second.next()).params).toEqual({ filePath: FILE });
+  });
+
+  test("H9 the same set twice sends twice, unlike D6", async () => {
+    const sidecar = start();
+    const client = await Client.connect(sidecar);
+
+    sidecar.mention([FILE]);
+    sidecar.mention([FILE]);
+    expect((await client.next()).params).toEqual({ filePath: FILE });
+    expect((await client.next()).params).toEqual({ filePath: FILE });
+  });
+
+  test("H4 mentioning does not disturb the selection_changed stream", async () => {
+    const sidecar = start();
+    sidecar.setFocus(FILE);
+    const client = await Client.connect(sidecar);
+    expect((await client.next()).method).toBe("selection_changed");
+
+    sidecar.mention([OTHER]);
+    expect((await client.next()).method).toBe("at_mentioned");
+
+    // D6 still measures against what selection_changed last pushed, so the
+    // mention must not have counted as one.
+    sidecar.setFocus(OTHER);
+    const next = await client.next();
+    expect(next.method).toBe("selection_changed");
+    expect(next.params).toMatchObject({ filePath: OTHER });
+  });
+});
