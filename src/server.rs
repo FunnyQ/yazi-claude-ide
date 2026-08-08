@@ -1,9 +1,10 @@
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Map, Value, json};
 use std::io;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
-use tokio::sync::{broadcast, oneshot};
+use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::accept_hdr_async;
 use tokio_tungstenite::tungstenite::handshake::server::ErrorResponse;
 use tokio_tungstenite::tungstenite::http::StatusCode;
@@ -14,19 +15,25 @@ use crate::tools::{self, SelectionPayload, ToolContext};
 pub struct StartOptions {
     pub workspace_folders: Box<dyn Fn() -> Vec<String> + Send + Sync>,
     pub reveal: Box<dyn Fn(&str) + Send + Sync>,
-    pub auth_token: Option<String>,
-    pub port: Option<u16>,
+    pub auth_token: String,
+}
+
+/// One open WebSocket, addressed by an unbounded queue.
+///
+/// Unbounded rather than a bounded broadcast: H5 and H9 require every marked item
+/// to reach every connection, in order. A bounded channel drops the oldest frames
+/// when a sender outruns a receiver, and `mention` sends a whole marked set in one
+/// synchronous loop, so a large set would silently lose its earliest mentions.
+struct Connection {
+    id: u64,
+    frames: mpsc::UnboundedSender<String>,
 }
 
 struct State {
     focused: Option<String>,
-    // PORT-05 push-stream state is declared early so the shared state shape stays stable.
-    #[allow(dead_code)]
     hovered: Option<String>,
-    // PORT-05 push-stream state is declared early so the shared state shape stays stable.
-    #[allow(dead_code)]
     last_pushed: Option<String>,
-    clients: usize,
+    clients: Vec<Connection>,
 }
 
 struct Inner {
@@ -35,7 +42,7 @@ struct Inner {
     state: Mutex<State>,
     workspace_folders: Box<dyn Fn() -> Vec<String> + Send + Sync>,
     reveal: Box<dyn Fn(&str) + Send + Sync>,
-    broadcasts: broadcast::Sender<String>,
+    next_connection_id: AtomicU64,
     shutdown: Mutex<Option<oneshot::Sender<()>>>,
 }
 
@@ -65,20 +72,17 @@ impl Sidecar {
             // exactly when it is most useful. One variable serving both purposes
             // would break one of them.
             state.hovered = file_path.map(str::to_owned);
-            state.focused = match tools::selection_payload(file_path) {
-                SelectionPayload::Success { file_path, .. } => Some(file_path),
-                SelectionPayload::Failure { .. } => None,
-            };
+            // Gate on the bare stat, not on a full payload: hover fires on every
+            // cursor keystroke, and only `selection_frame` needs the payload.
+            state.focused = file_path
+                .filter(|path| tools::is_file(path))
+                .map(str::to_owned);
         }
         self.inner.push();
     }
 
     pub fn focused_file(&self) -> Option<String> {
-        self.inner
-            .state
-            .lock()
-            .ok()
-            .and_then(|state| state.focused.clone())
+        self.inner.focused()
     }
 
     pub fn mention(&self, file_paths: &[String]) {
@@ -106,10 +110,11 @@ impl Sidecar {
                 "params": { "filePath": file_path },
             })
             .to_string();
-            let _ = self.inner.broadcasts.send(frame);
+            self.inner.broadcast(frame);
         }
     }
 
+    /// Idempotent — stopping twice is not an error.
     pub fn stop(&self) {
         let sender = self
             .inner
@@ -120,70 +125,98 @@ impl Sidecar {
         if let Some(sender) = sender {
             let _ = sender.send(());
         }
+        // Dropping every queue sender is what ends the connection tasks: each one
+        // sees its receiver close and answers with a WebSocket close frame. The
+        // listener oneshot above only stops new connections being accepted.
+        if let Ok(mut state) = self.inner.state.lock() {
+            state.clients.clear();
+            state.last_pushed = None;
+        }
     }
 }
 
 impl Inner {
-    /// D1-D2. `None` when there is nothing to say: nothing focused, or a path that
-    /// stopped statting since `set_focus` accepted it.
-    fn selection_frame(&self) -> Option<String> {
-        let focused = self
-            .state
-            .lock()
-            .ok()
-            .and_then(|state| state.focused.clone());
-        let SelectionPayload::Success {
-            file_path,
-            text,
-            selection,
-            ..
-        } = tools::selection_payload(focused.as_deref())
-        else {
-            return None;
-        };
-        Some(
-            json!({
-                "jsonrpc": "2.0",
-                "method": "selection_changed",
-                "params": {
-                    "text": text,
-                    "filePath": file_path,
-                    "fileUrl": format!("file://{file_path}"),
-                    "selection": selection,
-                },
-            })
-            .to_string(),
-        )
-    }
-
-    /// Broadcast a focus change. Silent with nothing new or nobody listening.
-    fn push(&self) {
-        let should_push = self
-            .state
-            .lock()
-            .ok()
-            .is_some_and(|state| state.focused != state.last_pushed && state.clients > 0);
-        if !should_push {
-            return;
-        }
-        let Some(frame) = self.selection_frame() else {
-            return;
-        };
-        if self.broadcasts.send(frame).is_err() {
-            return;
-        }
-        if let Ok(mut state) = self.state.lock() {
-            state.last_pushed = state.focused.clone();
-        }
-    }
-}
-
-impl ToolContext for Inner {
-    fn focused_file(&self) -> Option<String> {
+    fn focused(&self) -> Option<String> {
         self.state
             .lock()
             .ok()
             .and_then(|state| state.focused.clone())
+    }
+
+    fn mark_pushed(&self) {
+        if let Ok(mut state) = self.state.lock() {
+            state.last_pushed = state.focused.clone();
+        }
+    }
+
+    /// D1-D2. `None` when there is nothing to say: nothing focused, or a path that
+    /// stopped statting since `set_focus` accepted it.
+    fn selection_frame(&self) -> Option<String> {
+        selection_frame(self.focused().as_deref())
+    }
+
+    /// Queue a frame for every open connection. `false` when nobody is listening.
+    fn broadcast(&self, frame: String) -> bool {
+        let Ok(state) = self.state.lock() else {
+            return false;
+        };
+        if state.clients.is_empty() {
+            return false;
+        }
+        for client in &state.clients {
+            let _ = client.frames.send(frame.clone());
+        }
+        true
+    }
+
+    /// Broadcast a focus change. Silent with nothing new or nobody listening.
+    fn push(&self) {
+        let Ok(state) = self.state.lock() else {
+            return;
+        };
+        if state.focused == state.last_pushed || state.clients.is_empty() {
+            return;
+        }
+        let focused = state.focused.clone();
+        drop(state);
+
+        let Some(frame) = selection_frame(focused.as_deref()) else {
+            return;
+        };
+        if self.broadcast(frame) {
+            self.mark_pushed();
+        }
+    }
+}
+
+fn selection_frame(focused: Option<&str>) -> Option<String> {
+    let SelectionPayload::Success {
+        file_path,
+        text,
+        selection,
+        ..
+    } = tools::selection_payload(focused)
+    else {
+        return None;
+    };
+    Some(
+        json!({
+            "jsonrpc": "2.0",
+            "method": "selection_changed",
+            "params": {
+                "text": text,
+                "filePath": file_path,
+                "fileUrl": format!("file://{file_path}"),
+                "selection": selection,
+            },
+        })
+        .to_string(),
+    )
+}
+
+impl ToolContext for Inner {
+    fn focused_file(&self) -> Option<String> {
+        self.focused()
     }
 
     fn workspace_folders(&self) -> Vec<String> {
@@ -198,26 +231,21 @@ impl ToolContext for Inner {
 // tungstenite requires the auth callback to return a full HTTP rejection response.
 #[allow(clippy::result_large_err)]
 pub async fn start_sidecar(opts: StartOptions) -> io::Result<Sidecar> {
-    let auth_token = match opts.auth_token {
-        Some(token) => token,
-        None => generate_auth_token()?,
-    };
-    let listener = TcpListener::bind(("127.0.0.1", opts.port.unwrap_or(0))).await?;
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
     let port = listener.local_addr()?.port();
-    let (broadcasts, _) = broadcast::channel(32);
     let (shutdown_sender, mut shutdown_receiver) = oneshot::channel();
     let inner = Arc::new(Inner {
-        auth_token,
+        auth_token: opts.auth_token,
         port,
         state: Mutex::new(State {
             focused: None,
             hovered: None,
             last_pushed: None,
-            clients: 0,
+            clients: Vec::new(),
         }),
         workspace_folders: opts.workspace_folders,
         reveal: opts.reveal,
-        broadcasts,
+        next_connection_id: AtomicU64::new(0),
         shutdown: Mutex::new(Some(shutdown_sender)),
     });
     let listener_inner = Arc::clone(&inner);
@@ -265,20 +293,18 @@ pub async fn start_sidecar(opts: StartOptions) -> io::Result<Sidecar> {
     Ok(Sidecar { inner })
 }
 
-fn generate_auth_token() -> io::Result<String> {
-    let mut bytes = [0_u8; 32];
-    getrandom::fill(&mut bytes).map_err(io::Error::other)?;
-    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
-}
-
 async fn serve_connection<S>(socket: tokio_tungstenite::WebSocketStream<S>, inner: Arc<Inner>)
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
+    let id = inner.next_connection_id.fetch_add(1, Ordering::Relaxed);
+    let (frames_sender, mut frames) = mpsc::unbounded_channel();
     if let Ok(mut state) = inner.state.lock() {
-        state.clients += 1;
+        state.clients.push(Connection {
+            id,
+            frames: frames_sender,
+        });
     }
-    let mut broadcasts = inner.broadcasts.subscribe();
     let (mut writer, mut reader) = socket.split();
 
     // D3 is owed to each connection separately. A new client must be pushed the
@@ -290,12 +316,10 @@ where
             .await
             .is_err()
         {
-            close_connection(&inner);
+            close_connection(&inner, id);
             return;
         }
-        if let Ok(mut state) = inner.state.lock() {
-            state.last_pushed = state.focused.clone();
-        }
+        inner.mark_pushed();
     }
 
     loop {
@@ -313,27 +337,30 @@ where
                     Some(Ok(_)) => {}
                 }
             }
-            broadcast = broadcasts.recv() => {
-                match broadcast {
-                    Ok(frame) => {
+            frame = frames.recv() => {
+                match frame {
+                    Some(frame) => {
                         if writer.send(Message::Text(Utf8Bytes::from(frame))).await.is_err() {
                             break;
                         }
                     }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(broadcast::error::RecvError::Closed) => break,
+                    // `Sidecar::stop` dropped this connection's sender.
+                    None => {
+                        let _ = writer.send(Message::Close(None)).await;
+                        break;
+                    }
                 }
             }
         }
     }
 
-    close_connection(&inner);
+    close_connection(&inner, id);
 }
 
-fn close_connection(inner: &Inner) {
+fn close_connection(inner: &Inner, id: u64) {
     if let Ok(mut state) = inner.state.lock() {
-        state.clients = state.clients.saturating_sub(1);
-        if state.clients == 0 {
+        state.clients.retain(|client| client.id != id);
+        if state.clients.is_empty() {
             // The next connection is owed D3 again — one push of the then-current
             // file. Clearing `last_pushed` ensures the next connection sees its D3
             // push even if the focused file never changes.
