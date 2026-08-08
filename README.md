@@ -22,9 +22,11 @@ ya pkg add FunnyQ/yazi-claude-ide:claude-ide
 curl -sSL https://raw.githubusercontent.com/FunnyQ/yazi-claude-ide/main/install.sh | bash
 ```
 
-That puts the latest macOS arm64 release in `~/.local/bin`; set `YCI_INSTALL_DIR`
-to choose somewhere else. On any other platform — or if you would rather read the
-source than pipe it to a shell — build it:
+That puts the latest release in `~/.local/bin`; set `YCI_INSTALL_DIR` to choose
+somewhere else. Prebuilt binaries cover macOS arm64, Linux x86_64, and Linux
+arm64 — the Linux builds are statically linked against musl and need no system
+libraries. On any other platform — or if you would rather read the source than
+pipe it to a shell — build it:
 
 ```sh
 cargo install --git https://github.com/FunnyQ/yazi-claude-ide

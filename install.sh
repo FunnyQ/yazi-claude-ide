@@ -13,9 +13,14 @@ die() { printf 'install.sh: %s\n' "$1" >&2; exit 1; }
 
 os=$(uname -s)
 arch=$(uname -m)
-[ "$os" = "Darwin" ] && [ "$arch" = "arm64" ] || die \
-  "no prebuilt binary for ${os}/${arch} — only macOS arm64 is published.
-  Build it instead: cargo install --git https://github.com/${REPO}"
+case "${os}/${arch}" in
+  Darwin/arm64)              target="aarch64-apple-darwin" ;;
+  Linux/x86_64)              target="x86_64-unknown-linux-musl" ;;
+  Linux/aarch64|Linux/arm64) target="aarch64-unknown-linux-musl" ;;
+  *) die "no prebuilt binary for ${os}/${arch} — published targets are macOS arm64,
+  Linux x86_64, and Linux arm64.
+  Build it instead: cargo install --git https://github.com/${REPO}" ;;
+esac
 
 command -v curl >/dev/null || die "curl is required"
 command -v tar  >/dev/null || die "tar is required"
@@ -24,7 +29,7 @@ tag=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
   | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
 [ -n "$tag" ] || die "could not read the latest release tag from the GitHub API"
 
-asset="yazi-claude-ide-aarch64-apple-darwin.tar.gz"
+asset="yazi-claude-ide-${target}.tar.gz"
 url="https://github.com/${REPO}/releases/download/${tag}/${asset}"
 
 tmp=$(mktemp -d)

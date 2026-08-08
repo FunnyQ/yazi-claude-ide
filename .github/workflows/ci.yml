@@ -4,10 +4,15 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 jobs:
   check:
-    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, ubuntu-24.04]
+    runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -29,12 +34,22 @@ jobs:
       - name: Run tests
         run: cargo test
 
-  release:
+  build:
     needs: check
-    if: startsWith(github.ref, 'refs/tags/v')
-    permissions:
-      contents: write
-    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-15
+            file_match: "Mach-O 64-bit executable arm64"
+          - target: x86_64-unknown-linux-musl
+            runner: ubuntu-24.04
+            file_match: "ELF 64-bit LSB .*x86-64.*static"
+          - target: aarch64-unknown-linux-musl
+            runner: ubuntu-24.04-arm
+            file_match: "ELF 64-bit LSB .*ARM aarch64.*static"
+    runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -42,22 +57,45 @@ jobs:
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin
+          targets: ${{ matrix.target }}
 
       - name: Build release binary
-        run: cargo build --release --target aarch64-apple-darwin
+        run: cargo build --release --target ${{ matrix.target }}
 
       - name: Verify binary architecture
+        env:
+          FILE_MATCH: ${{ matrix.file_match }}
         run: |
-          file target/aarch64-apple-darwin/release/yazi-claude-ide
-          lipo -archs target/aarch64-apple-darwin/release/yazi-claude-ide | grep -q arm64
+          bin=target/${{ matrix.target }}/release/yazi-claude-ide
+          file "$bin"
+          file "$bin" | grep -Eq "$FILE_MATCH"
 
       - name: Package release binary
         run: |
-          tar -czf yazi-claude-ide-aarch64-apple-darwin.tar.gz \
-            -C target/aarch64-apple-darwin/release yazi-claude-ide
+          tar -czf yazi-claude-ide-${{ matrix.target }}.tar.gz \
+            -C target/${{ matrix.target }}/release yazi-claude-ide
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: yazi-claude-ide-${{ matrix.target }}
+          path: yazi-claude-ide-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: yazi-claude-ide-*
+          merge-multiple: true
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          files: yazi-claude-ide-aarch64-apple-darwin.tar.gz
+          files: yazi-claude-ide-*.tar.gz
