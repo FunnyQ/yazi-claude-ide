@@ -1,0 +1,15 @@
+{
+  "mode": "whole-repo",
+  "workflow": "github-flow",
+  "tag": "v{version}",
+  "changelog": "CHANGELOG.md",
+  "branches": {
+    "main": "main"
+  },
+  "versionFiles": [
+    {
+      "path": "Cargo.toml",
+      "kind": "toml"
+    }
+  ]
+}
