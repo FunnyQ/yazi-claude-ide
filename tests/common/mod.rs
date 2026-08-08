@@ -20,7 +20,11 @@ pub struct Client {
 
 impl Client {
     pub async fn connect(sidecar: &Sidecar, token: &str) -> Result<Client, ConnectError> {
-        let mut request = format!("ws://127.0.0.1:{}", sidecar.port()).into_client_request()?;
+        Self::connect_port(sidecar.port(), token).await
+    }
+
+    pub async fn connect_port(port: u16, token: &str) -> Result<Client, ConnectError> {
+        let mut request = format!("ws://127.0.0.1:{port}").into_client_request()?;
         let header = token.parse().map_err(|error| {
             ConnectError::Io(std::io::Error::new(std::io::ErrorKind::InvalidInput, error))
         })?;
