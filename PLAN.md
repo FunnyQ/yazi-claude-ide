@@ -1,6 +1,6 @@
 # Yazi Claude Code IDE Plugin — PLAN
 
-> Teach Claude Code's `/ide` to recognise yazi (a terminal file manager) the way it recognises VS Code or Neovim, so it can pull context such as the currently selected file. Status: tasks #1, #2, and #3 complete — both gates passed and the contract is written. Task #4 (protocol-core) is next.
+> Teach Claude Code's `/ide` to recognise yazi (a terminal file manager) the way it recognises VS Code or Neovim, so it can pull context such as the currently selected file. Status: tasks #1-#5 complete — both gates passed, the contract is written, and the sidecar talks to both real yazi and the measured protocol. Task #6 (resilience-validation) is next, and the sidecar outliving yazi is its first item.
 
 ## Context
 
@@ -107,7 +107,7 @@ The IPC hop the earlier draft assumed (unix socket, stdin/stdout) is not needed 
 2. ~~**yazi-capability-spike**~~ — **complete, passed.** See "yazi-capability-spike result" above.
 3. ~~**contract**~~ — **complete.** [docs/contract.md](docs/contract.md) states the specification as numbered clauses A1–G4, so each contract test can name the clause it covers.
 4. **protocol-core** — implement the lock file lifecycle, auth, WebSocket, and JSON-RPC dispatch, with contract tests.
-5. **yazi-binding** — wire up the focused file and workspace state, using a sidecar or not depending on the outcome of task #2.
+5. ~~**yazi-binding**~~ — **complete.** `plugin/claude-ide.yazi` double-forks the sidecar from `setup()`; `src/yazi.ts` follows this instance's `hover` and `cd` events off `ya sub`. Verified against a real yazi with `test/manual/harness.sh` — see its README for what was proved. Two corrections to the capability spike came out of it, both recorded in [docs/yazi-capability.md](docs/yazi-capability.md): `cx` does not exist in `setup()`, and the anchor therefore comes from the first `cd` event rather than from any directory the plugin could read.
 6. **resilience-validation** — see the verification checklist below.
 
 ## Verification checklist (beyond the happy path)
