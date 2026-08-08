@@ -1,6 +1,6 @@
 mod common;
 
-use common::Client;
+use common::{Client, assert_unauthorized};
 use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -8,10 +8,12 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
-use tokio_tungstenite::tungstenite::Error;
-use yazi_claude_ide::lock::LockFile;
+use yazi_claude_ide::lock::{self, LockFile};
 
 const TIMEOUT: Duration = Duration::from_secs(8);
+// Poll rather than spin: eight tests in this file wait on spawned sidecars in
+// parallel, and `yield_now` burns the cores those sidecars need to start.
+const POLL: Duration = Duration::from_millis(5);
 
 struct ChildGuard {
     child: Option<Child>,
@@ -38,7 +40,7 @@ impl ChildGuard {
                 Instant::now() < deadline,
                 "sidecar did not exit before timeout"
             );
-            thread::yield_now();
+            thread::sleep(POLL);
         }
     }
 }
@@ -107,7 +109,7 @@ fn wait_for_lock_count(config: &Path, count: usize) -> Vec<PathBuf> {
             "expected {count} lock file(s), found {}",
             files.len()
         );
-        thread::yield_now();
+        thread::sleep(POLL);
     }
 }
 
@@ -115,8 +117,10 @@ fn wait_for_one_lock(config: &Path) -> PathBuf {
     wait_for_lock_count(config, 1).pop().unwrap()
 }
 
+/// Reads through the shipped reader, so the test cannot drift from what ships.
 fn read_lock(path: &Path) -> LockFile {
-    serde_json::from_slice(&fs::read(path).expect("read lock file")).expect("parse lock file")
+    lock::read_lock(path.parent().expect("lock directory"), port_from(path))
+        .expect("parse lock file")
 }
 
 fn port_from(path: &Path) -> u16 {
@@ -237,14 +241,12 @@ async fn e1_the_running_binary_refuses_a_wrong_token() {
     let temp = TempDir::new().unwrap();
     let _child = spawn_sidecar(temp.path(), "lifecycle-wrong-token", false);
     let path = wait_for_one_lock(temp.path());
-    let error = match Client::connect_port(port_from(&path), "wrong-token").await {
-        Ok(_) => panic!("wrong token must not upgrade"),
-        Err(error) => error,
-    };
-    match error {
-        Error::Http(response) => assert_eq!(response.status(), 401),
-        other => panic!("expected HTTP rejection, got {other}"),
-    }
+    assert_unauthorized(
+        Client::connect_port(port_from(&path), "wrong-token")
+            .await
+            .err()
+            .expect("wrong token must not upgrade"),
+    );
 }
 
 #[tokio::test]
