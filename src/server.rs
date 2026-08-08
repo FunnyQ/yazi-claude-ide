@@ -403,7 +403,7 @@ fn handle_json_rpc(frame: &str, ctx: &dyn ToolContext) -> Option<String> {
                 json!({
                     "protocolVersion": protocol_version,
                     "capabilities": { "tools": {} },
-                    "serverInfo": { "name": "yazi", "version": "0.1.0" },
+                    "serverInfo": { "name": "yazi", "version": env!("CARGO_PKG_VERSION") },
                 }),
             )
         }
