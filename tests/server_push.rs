@@ -1,35 +1,18 @@
-#![allow(dead_code)]
-
 mod common;
 
-use common::Client;
+use common::{Client, fixture};
 use serde_json::{Value, json};
-use std::path::PathBuf;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::sleep;
-use yazi_claude_ide::server::{Sidecar, StartOptions, start_sidecar};
+use yazi_claude_ide::server::Sidecar;
 
 const TOKEN: &str = "push-test-token";
 const WAIT: Duration = Duration::from_secs(2);
 const QUIET: Duration = Duration::from_millis(150);
 
-fn fixture(name: &str) -> String {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join(name)
-        .to_string_lossy()
-        .into_owned()
-}
-
 async fn sidecar() -> Sidecar {
-    start_sidecar(StartOptions {
-        workspace_folders: Box::new(Vec::new),
-        reveal: Box::new(|_| {}),
-        auth_token: Some(TOKEN.to_owned()),
-        port: None,
-    })
-    .await
-    .expect("test sidecar should start")
+    common::sidecar(TOKEN, Vec::new()).await
 }
 
 async fn connect(sidecar: &Sidecar) -> Client {
@@ -319,4 +302,28 @@ async fn h9_pressing_twice_sends_twice_with_no_dedupe() {
 
     let first = next(&mut client).await;
     assert_eq!(next(&mut client).await, first);
+}
+
+#[tokio::test]
+async fn h5_h9_a_marked_set_larger_than_any_queue_bound_arrives_whole_and_in_order() {
+    // `mention` sends a whole marked set in one synchronous loop, so nothing on the
+    // connection side gets to drain between frames. A bounded queue would drop the
+    // earliest mentions here and H5 (order) plus H9 (no dedupe) would both silently
+    // fail on a large selection.
+    let server = sidecar().await;
+    let mut client = connect(&server).await;
+    let temp = TempDir::new().expect("tempdir");
+    let paths: Vec<String> = (0..64)
+        .map(|index| {
+            let path = temp.path().join(format!("marked-{index:02}.txt"));
+            std::fs::write(&path, "marked").expect("write fixture");
+            path.to_string_lossy().into_owned()
+        })
+        .collect();
+
+    server.mention(&paths);
+    for path in &paths {
+        assert_eq!(file_path(&next(&mut client).await), path);
+    }
+    assert_eq!(client.silence(QUIET).await, None);
 }
