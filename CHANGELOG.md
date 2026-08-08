@@ -5,6 +5,17 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-08-09
+
+_tracks tag `v0.2.1`_
+
+### Added
+- The plugin directory now ships a LICENSE and README.md, which `ya pkg` requires. This fixes `ya pkg add FunnyQ/yazi-claude-ide:claude-ide`, the install command in the README, which had never worked.
+
+### Fixed
+- `/ide` no longer fails with `Failed to connect to yazi.` on every attempt. Claude Code 2.1.226 sends `Sec-WebSocket-Protocol: mcp` on its upgrade request and disconnects if the server's `101 Switching Protocols` response doesn't echo it back; the sidecar had never echoed it, so every prior release (v0.1.0 and v0.2.0) was unusable with a real Claude Code. The sidecar now echoes any requested subprotocol.
+- `serverInfo.version` reported a hardcoded `0.1.0`, left behind by the v0.2.0 bump. It now reads the crate's actual version at compile time.
+
 ## [0.2.0] - 2026-08-08
 
 _tracks tag `v0.2.0`_
