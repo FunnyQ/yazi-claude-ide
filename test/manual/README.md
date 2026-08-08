@@ -17,6 +17,24 @@ test/manual/harness.sh log       # its stderr
 test/manual/harness.sh stop
 ```
 
+`verify` runs the assertions instead of printing state, and exits non-zero on any
+failure. It takes about two minutes, because each case waits out the liveness
+poll.
+
+```sh
+test/manual/harness.sh verify
+```
+
+It covers the clauses the unit suite cannot reach, because the unit suite injects
+the very things under test — the liveness probe and the pid check:
+
+| Case | Clause | Assertion |
+| --- | --- | --- |
+| `quit` | G3, A6 | after `ya emit-to <id> quit`, the sidecar exits and removes its lock file |
+| `kill` | G3, A6 | the same after `kill -9` of yazi |
+| `stale` | A7 | a `kill -9`ed sidecar leaves a lock file, and the next startup reclaims it |
+| `g4` | G4 | two instances get distinct ports, tokens, and sidecars, and one exiting leaves the other's lock file byte-identical |
+
 Drive yazi with `ya emit-to` rather than keystrokes. Keys depend on where the
 cursor happens to be; `emit-to` does not.
 
@@ -39,8 +57,12 @@ ya emit-to $ID reveal "$SB/two.txt"  # hover, and so a selection_changed push
 - `reveal` produces a `selection_changed` push carrying that file's path.
 - Directories never produce a push. Only regular files do.
 
-## Known gap
+## What `verify` proved (2026-08-08)
 
-The sidecar outlives yazi. After `tmux kill-server`, `pgrep -f src/sidecar.ts`
-still finds it and its lock file is still in place — the process is alive, so
-nothing reclaims the lock either. Contract clause G3, PLAN task #6.
+The sidecar used to outlive yazi, and its lock file with it. It now polls
+`ya emit-to <id> noop` and exits on three consecutive failures — see the
+liveness-probe measurements in [../../docs/yazi-capability.md](../../docs/yazi-capability.md).
+All four cases pass, and disabling the poll turns three of them red, so the
+harness observes the behaviour rather than merely reporting green.
+
+Exit takes about six seconds: 2s per poll, three failures.
