@@ -44,7 +44,7 @@ The second go/no-go gate **passed**. Full measurements are in [docs/yazi-capabil
 2. **A double-forked child survives, and survives too much.** `sh -c 'nohup … &'` launched via `:status()` outlives both a normal quit and `SIGKILL` of yazi. The sidecar must therefore terminate itself; nothing will do it.
 3. **`ya sub` already carries the MVP payload, with no plugin involved.** Any process can run `ya sub hover,cd` and receive `{"tab":N,"url":"…"}` per event. Since the spike proved the MVP only needs a path, the plugin's one indispensable job is launching the sidecar — everything else can come off the DDS stream.
 4. **`YAZI_ID` is inherited by plugin-spawned processes.** This is what makes the split work: `ya sub` is global across every yazi on the machine, and the sidecar can only filter its own instance's events because the plugin handed it `YAZI_ID`. A sidecar started any other way cannot.
-5. **`ya emit-to` + `ya sub` make yazi fully drivable headlessly**, unlike the Claude Code side. `spike/yazi/harness.sh` scripts the whole loop. Task #6's checklist can be automated on the yazi half.
+5. **`ya emit-to` + `ya sub` make yazi fully drivable headlessly**, unlike the Claude Code side. `spike/yazi/harness.sh` scripted the whole loop for the spike; the product harness is `test/manual/harness.sh`, and its `verify` subcommand automates the yazi half of task #6's checklist.
 
 ## workspace-policy probe result (2026-08-08)
 
@@ -106,22 +106,22 @@ The IPC hop the earlier draft assumed (unix socket, stdin/stdout) is not needed 
 1. ~~**protocol-spike**~~ — **complete, passed.** See "protocol-spike result" above.
 2. ~~**yazi-capability-spike**~~ — **complete, passed.** See "yazi-capability-spike result" above.
 3. ~~**contract**~~ — **complete.** [docs/contract.md](docs/contract.md) states the specification as numbered clauses A1–G4, so each contract test can name the clause it covers.
-4. **protocol-core** — implement the lock file lifecycle, auth, WebSocket, and JSON-RPC dispatch, with contract tests.
+4. ~~**protocol-core**~~ — **complete.** `src/lock.ts`, `src/server.ts`, and `src/tools.ts` implement the lock file lifecycle, auth, WebSocket, and JSON-RPC dispatch, with a contract test per clause.
 5. ~~**yazi-binding**~~ — **complete.** `plugin/claude-ide.yazi` double-forks the sidecar from `setup()`; `src/yazi.ts` follows this instance's `hover` and `cd` events off `ya sub`. Verified against a real yazi with `test/manual/harness.sh` — see its README for what was proved. Two corrections to the capability spike came out of it, both recorded in [docs/yazi-capability.md](docs/yazi-capability.md): `cx` does not exist in `setup()`, and the anchor therefore comes from the first `cd` event rather than from any directory the plugin could read.
-6. **resilience-validation** — see the verification checklist below.
+6. **resilience-validation** — in progress. The yazi half is automated and passing (`test/manual/harness.sh verify`); the three items needing a live Claude Code are open. See the verification checklist below.
 
 ## Verification checklist (beyond the happy path)
 
-- Lock directory and file modes are `0700` and `0600` respectively.
-- The server binds loopback only, and a wrong token cannot connect.
-- Two concurrent yazi instances do not overwrite each other's lock file, port, or token.
-- After the sidecar crashes or is killed, the next startup recognises and reclaims the stale lock.
+- ~~Lock directory and file modes are `0700` and `0600` respectively.~~ Contract A2, `test/lock.test.ts`.
+- ~~The server binds loopback only, and a wrong token cannot connect.~~ Contract A5 and E1, `test/server.test.ts`.
+- ~~Two concurrent yazi instances do not overwrite each other's lock file, port, or token.~~ Contract G4, `harness.sh verify` case `g4`.
+- ~~After the sidecar crashes or is killed, the next startup recognises and reclaims the stale lock.~~ Contract A7, `harness.sh verify` case `stale`.
 - Both orderings work: Claude Code started first, and yazi started first.
 - The connection recovers after a WebSocket drop, and returns fresh data once yazi's state changes.
 - `/ide` finds yazi and the context updates after selecting a file. This was the original happy-path manual test; it is kept, but it is not the only verification.
-- The sidecar exits after its yazi does, under both normal quit and `SIGKILL`, leaving no lock file behind.
+- ~~The sidecar exits after its yazi does, under both normal quit and `SIGKILL`, leaving no lock file behind.~~ Contract G3, `harness.sh verify` cases `quit` and `kill`.
 
-The yazi half of this list can be automated: `ya emit-to` drives yazi and `ya sub` observes it, so `spike/yazi/harness.sh` scripts the whole loop headlessly. The Claude Code half cannot — `--ide` is interactive-only, per task #1.
+The yazi half of this list is automated by `test/manual/harness.sh verify`, which asserts the four clauses above against a real yazi and exits non-zero on any failure. The Claude Code half cannot be — `--ide` is interactive-only, per task #1 — so the three remaining items need a human.
 
 ## Known gaps
 
@@ -133,9 +133,11 @@ The yazi half of this list can be automated: `ya emit-to` drives yazi and `ya su
 
    Two loose ends remain, neither blocking the MVP. **When the CLI re-reads the lock file is unmeasured** — it certainly reads on connect, so the lock file has to stay in an acceptable state at all times. The anchor + cursor policy satisfies that by construction, which is why it costs nothing extra. **Whether a connected-but-unadopted socket gets adopted retroactively** once the lock file starts matching is also unmeasured; the MVP never depends on it, because the user reaches for `/ide` after navigating, not before.
 
-6. **The sidecar outlives yazi and nothing cleans it up.** A double-forked child survives normal quit and `SIGKILL`, and DDS emits no departure event — no `bye`, and no refreshed `hey` roster when a peer leaves. The sidecar must poll for its yazi's absence. Belongs to `resilience-validation`.
+6. ~~**The sidecar outlives yazi and nothing cleans it up.**~~ **Closed.** DDS still emits no departure event — re-measured on 26.5.6, no `bye` reaches a subscriber even though the binary carries the kind. The sidecar therefore polls `ya emit-to <id> noop`, which exits 0 for a live receiver and 1 for an unknown one, and exits after three consecutive failures. See the liveness-probe measurements in [docs/yazi-capability.md](docs/yazi-capability.md).
 
-7. **DDS server succession is untested.** The first yazi instance on the machine becomes the DDS server and later ones are clients. What happens to the surviving peers when the server instance exits was not measured, because testing it meant killing unrelated live yazi sessions. Affects the "two concurrent yazi instances" checklist item.
+7. **DDS server succession is untested.** The first yazi instance on the machine becomes the DDS server and later ones are clients. What happens to the surviving peers when the server instance exits was not measured, because testing it meant killing unrelated live yazi sessions. The `g4` verification covers two peers, not the server leaving.
+
+   This is now the reason the liveness poll requires three consecutive failures rather than one: a probe failure means DDS could not route to that id, and succession is the one plausible way a live yazi becomes briefly unroutable. If succession is ever measured to be instant, the threshold can drop to one and the sidecar exits in 2s instead of 6s.
 
 ## Definition of done (MVP)
 
