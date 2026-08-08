@@ -32,6 +32,20 @@ type State = {
   filePath?: string | null;
   text?: string;
   selection?: Selection;
+  /**
+   * The marked-files spike's independent variable. `selection_changed` is a
+   * single-slot state — pushing it N times leaves only the last path — so a set
+   * of marked files needs `at_mentioned`, one notification per file. Documented
+   * in PROTOCOL.md, never measured against a real CLI.
+   */
+  mentions?: string[];
+  /**
+   * When set, every mention carries this `[lineStart, lineEnd]`. When absent the
+   * two fields are omitted entirely. Measured 2026-08-08: sending `0, 0` to mean
+   * "the whole file" renders as `@PLAN.md#L1`, so the CLI reads 0 as a line
+   * anchor rather than as "no range". Omitting is the other thing to try.
+   */
+  mentionRange?: [number, number];
 };
 
 type SelectionPayload =
@@ -267,6 +281,35 @@ function pushSelection(): void {
   });
 }
 
+// What was mentioned last, so an unrelated edit to state.json does not resend
+// the same set. An empty `mentions` clears it, which is how the same set can be
+// pushed twice in one session.
+let lastMentions = "";
+
+/**
+ * One `at_mentioned` per marked file, sent in the order state.json lists them.
+ * A marked file in a file manager has no range, so the range is whatever
+ * `mentionRange` says and omitted when it says nothing.
+ */
+function pushMentions(): void {
+  const state = readState();
+  const mentions = state.mentions ?? [];
+  // The range is part of the key: re-sending the same files with a different
+  // range is a distinct probe, not a repeat.
+  const key = JSON.stringify([mentions, state.mentionRange ?? null]);
+  if (!socket || key === lastMentions) return;
+  lastMentions = key;
+  const range = state.mentionRange;
+  for (const filePath of mentions)
+    send({
+      jsonrpc: "2.0",
+      method: "at_mentioned",
+      params: range
+        ? { filePath, lineStart: range[0], lineEnd: range[1] }
+        : { filePath },
+    });
+}
+
 function handle(msg: RpcMessage): void {
   log("in", msg);
   if (msg.id === undefined) return; // notification, no reply expected
@@ -346,6 +389,7 @@ const server = Bun.serve({
     close() {
       console.error("✗ connection closed");
       socket = null;
+      lastMentions = ""; // the next connection is owed the current set again
     },
   },
 });
@@ -356,7 +400,10 @@ fs.writeFileSync(
   JSON.stringify({
     pid: process.pid,
     workspaceFolders: workspaces,
-    ideName: "yazi",
+    // Not "yazi": a real sidecar may be running alongside this spike, and the
+    // /ide picker lists lock files by ideName alone. Adoption is measured to
+    // depend on workspaceFolders only (baseline.md), so renaming costs nothing.
+    ideName: "yazi-spike",
     transport: "ws",
     authToken,
   }),
@@ -375,8 +422,12 @@ console.error(
   `tools     ${ADVERTISED.length} advertised / ${TOOLS.length} implemented`,
 );
 
-// Any edit to state.json pushes a selection_changed notification.
-fs.watchFile(STATE_FILE, { interval: 300 }, pushSelection);
+// Any edit to state.json pushes a selection_changed notification, and any
+// change to `mentions` pushes one at_mentioned per marked file.
+fs.watchFile(STATE_FILE, { interval: 300 }, () => {
+  pushSelection();
+  pushMentions();
+});
 
 function cleanup(): never {
   try {
