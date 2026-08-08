@@ -150,7 +150,6 @@ describe("F. tools that are out of scope but still called", () => {
     expect(answer("closeAllDiffTabs")).toBe("CLOSED_0_DIFF_TABS");
     expect(answer("close_tab", { tab_name: "x" })).toBe("TAB_CLOSED");
     expect(JSON.parse(answer("getDiagnostics"))).toEqual([]);
-    expect(answer("openDiff")).toBe("DIFF_REJECTED");
     for (const name of ["checkDocumentDirty", "saveDocument"]) {
       expect(JSON.parse(answer(name, { filePath: FILE }))).toEqual({
         success: false,
@@ -182,5 +181,23 @@ describe("F. tools that are out of scope but still called", () => {
 
   test("F4/E2 an unknown tool is refused, so the caller can raise -32601", () => {
     expect(callTool("executeCode", { code: "print(1)" }, ctx(FILE))).toBeNull();
+  });
+
+  test("F5 openDiff is refused, because answering it cancels the edit", () => {
+    // Not an omission: a benign-looking `DIFF_REJECTED` reads to the CLI as the
+    // user rejecting the change, and the edit never lands. Measured, see
+    // docs/baseline.md. -32601 is the only answer that leaves editing working.
+    expect(
+      callTool(
+        "openDiff",
+        {
+          old_file_path: FILE,
+          new_file_path: FILE,
+          new_file_contents: "x",
+          tab_name: "t",
+        },
+        ctx(FILE),
+      ),
+    ).toBeNull();
   });
 });

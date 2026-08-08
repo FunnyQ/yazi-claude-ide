@@ -126,8 +126,11 @@ export function callTool(
       return asPlain("TAB_CLOSED");
     case "getDiagnostics":
       return asText([]);
-    case "openDiff":
-      return asPlain("DIFF_REJECTED");
+    // No `openDiff` case, deliberately — F5. The CLI calls it before every edit
+    // that needs confirming, advertised or not, and reads `DIFF_REJECTED` as the
+    // user refusing the change: the edit is then cancelled. Measured against
+    // 2.1.223, in the four-tool shipping list. `-32601` is both the honest answer
+    // and the one that leaves the CLI where it would be with no IDE attached.
     case "checkDocumentDirty":
     case "saveDocument":
       return asText({
