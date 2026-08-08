@@ -48,6 +48,8 @@ desc = "Send the marked files to Claude"
 ```
 
 Start yazi, then run `claude` in another pane — it finds the sidecar on its own.
+Verified against Claude Code 2.1.226; the `/ide` protocol has no published
+specification, so a newer CLI can change what it expects without notice.
 
 Two channels, and they do different things:
 
@@ -72,3 +74,7 @@ dev/manual/harness.sh verify                # the clauses only a real yazi can s
 `dev/` is absent from a fresh clone, so contributors will not have the manual harness or contract.
 
 `dev/docs/contract.md` is the specification.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

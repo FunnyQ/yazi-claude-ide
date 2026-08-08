@@ -15,7 +15,9 @@ cargo install --path .                       # install the binary users' main.lu
 dev/manual/harness.sh verify                 # the [manual] clauses, needs a real yazi
 ```
 
-CI (`.github/workflows/ci.yml`) runs all three on macOS arm64 and publishes a binary on a `v*` tag. All three must stay green.
+CI (`.github/workflows/ci.yml`) is three jobs: `check` runs `fmt`/`clippy`/`test` on `macos-15` and `ubuntu-24.04`; `build` compiles and packages a matrix of `aarch64-apple-darwin`, `x86_64-unknown-linux-musl`, and `aarch64-unknown-linux-musl`; `publish` attaches all three artifacts to the GitHub Release. It triggers on `v*` tags and on `workflow_dispatch`. Only `publish` is gated on the tag, so a dispatch run exercises the whole build matrix without cutting a version. Everything must stay green.
+
+`install.sh` maps `uname` onto those same target triples and is served from the `main` raw URL, not from a tag. Change the asset names on one side and users are broken until the other side lands.
 
 ## The contract is the spec
 
@@ -79,6 +81,10 @@ Moving yazi's cursor pushes `selection_changed` — **the path alone, never cont
 **`YCI_POLL_MS` and `YCI_FAILURES_BEFORE_GONE` exist only for the lifecycle tests**, to make liveness detection finish in about a second instead of production's measured six. Keep them in the `main.rs` wiring.
 
 **Two `lock.rs` tests use this repository's own directory layout as a fixture.** Both build paths from `env!("CARGO_MANIFEST_DIR")` and point at `claude-ide.yazi/`. Renaming or moving a tracked top-level directory breaks `b1_the_anchor_is_the_git_root_or_the_directory_itself`: `anchor_for` shells out to `git -C <dir> rev-parse --show-toplevel`, and on a path that no longer exists git exits non-zero, so the function falls through to returning that path itself instead of the repo root. `b1_the_pair_is_anchor_then_cursor` keeps passing on the same stale path, because `workspace_folders` only builds strings and never touches disk.
+
+**A green suite does not mean a real Claude Code can connect.** `tests/common/mod.rs` builds its upgrade request from the same assumptions as `server.rs`, so any requirement both sides are blind to survives every test. That is how E6 hid from the first version onwards: Claude Code sends `Sec-WebSocket-Protocol: mcp` and hangs up on a `101` that does not echo it, while 115 tests stayed green. `dev/spike/fake-ide.ts` was blind to it too — it runs on `Bun.serve`, whose `server.upgrade()` echoes the subprotocol for you, so every measurement in `baseline.md` was taken through that blind spot. To check a claim about the real client, put a logging TCP proxy in front of the sidecar and point `~/.claude/ide/<port>.lock` at the proxy; `fake-ide.ts` is the control that tells you whether a failure is ours or upstream.
+
+**`claude-ide.yazi/` must keep its `LICENSE` and `README.md`.** They look redundant next to the ones at the repository root, and they are not: `plugin_files()` in yazi's `yazi-cli/src/package/dependency.rs` seeds a hardcoded `["LICENSE", "README.md", "main.lua"]` and never checks whether those files exist, so a missing one aborts the whole `ya pkg add` and deploys nothing. A root `LICENSE` does not satisfy it.
 
 **Logging is `eprintln!` to stderr.** `main.lua` redirects it to `/tmp/yazi-claude-ide-<YAZI_ID>.log`. No logging framework.
 
