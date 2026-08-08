@@ -15,7 +15,7 @@ cargo install --path .                       # install the binary users' main.lu
 dev/manual/harness.sh verify                 # the [manual] clauses, needs a real yazi
 ```
 
-CI (`.github/workflows/ci.yml`) is three jobs: `check` runs `fmt`/`clippy`/`test` on `macos-15` and `ubuntu-24.04`; `build` compiles and packages a matrix of `aarch64-apple-darwin`, `x86_64-unknown-linux-musl`, and `aarch64-unknown-linux-musl`; `publish` attaches all three artifacts to the GitHub Release. It triggers on `v*` tags and on `workflow_dispatch`. Only `publish` is gated on the tag, so a dispatch run exercises the whole build matrix without cutting a version. Everything must stay green.
+CI (`.github/workflows/ci.yml`) is three jobs: `check` runs `fmt`/`clippy`/`test` on `macos-15` and `ubuntu-24.04`, then runs `test` a second time with every environment variable `src/` reads set to a junk value; `build` compiles and packages a matrix of `aarch64-apple-darwin`, `x86_64-unknown-linux-musl`, and `aarch64-unknown-linux-musl`; `publish` attaches all three artifacts to the GitHub Release. It triggers on `v*` tags and on `workflow_dispatch`. Only `publish` is gated on the tag, so a dispatch run exercises the whole build matrix without cutting a version. Everything must stay green.
 
 `install.sh` maps `uname` onto those same target triples and is served from the `main` raw URL, not from a tag. Change the asset names on one side and users are broken until the other side lands.
 
@@ -72,13 +72,13 @@ Moving yazi's cursor pushes `selection_changed` — **the path alone, never cont
 
 **Never hold a `Mutex` guard across an `.await`.** `server.rs` and `main.rs` both take the guard, read or mutate, clone out what the caller needs, and drop it before any await or file write. The runtime is `tokio` current-thread — one sidecar serves one yazi, so a held guard deadlocks rather than degrades.
 
-**Push frames go through a per-connection `mpsc::UnboundedSender`, not a broadcast.** Unbounded is load-bearing: `mention()` pushes the whole marked set in one synchronous loop, and H5 requires order while H9 forbids drops. A bounded channel breaks both. (`dev/PLAN.md` still says `tokio::sync::broadcast`; the code is right and the plan is stale.)
+**Push frames go through a per-connection `mpsc::UnboundedSender`, not a broadcast.** Unbounded is load-bearing: `mention()` pushes the whole marked set in one synchronous loop, and H5 requires order while H9 forbids drops. A bounded channel breaks both.
 
 **`last_pushed` is one sidecar-wide value, not per-client.** Clause D8 reads as if it should be per-client, and the observable behaviour still satisfies it only because of the D3 exception: a connection-open push bypasses `push()` and writes straight to the joining socket. This is deliberate — do not "fix" it into per-client dedupe state.
 
 **The anchor is provisional until the first `cd`.** yazi's cwd is where the user ran it, not necessarily where it opened, so `main.rs` seeds the anchor from `current_dir()` and latches the real one from the first `cd` event (which yazi emits at startup). That un-latched window lives for milliseconds and is what B1 describes.
 
-**`YCI_POLL_MS` and `YCI_FAILURES_BEFORE_GONE` exist only for the lifecycle tests**, to make liveness detection finish in about a second instead of production's measured six. Keep them in the `main.rs` wiring.
+**`YCI_POLL_MS` and `YCI_FAILURES_BEFORE_GONE` exist only for the lifecycle tests**, to make liveness detection finish in about a second instead of production's measured six. Keep them in the `main.rs` wiring. Any new environment variable `src/` reads must also be added to the hostile-environment step in `ci.yml`, or that step stops covering it.
 
 **Two `lock.rs` tests use this repository's own directory layout as a fixture.** Both build paths from `env!("CARGO_MANIFEST_DIR")` and point at `claude-ide.yazi/`. Renaming or moving a tracked top-level directory breaks `b1_the_anchor_is_the_git_root_or_the_directory_itself`: `anchor_for` shells out to `git -C <dir> rev-parse --show-toplevel`, and on a path that no longer exists git exits non-zero, so the function falls through to returning that path itself instead of the repo root. `b1_the_pair_is_anchor_then_cursor` keeps passing on the same stale path, because `workspace_folders` only builds strings and never touches disk.
 
