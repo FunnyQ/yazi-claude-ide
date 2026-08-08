@@ -185,7 +185,7 @@ describe("B. workspace folders", () => {
   });
 
   test("B1 the anchor is the git root, or the directory itself outside a repo", () => {
-    expect(anchorFor(path.join(REPO, "spike", "yazi"))).toBe(REPO);
+    expect(anchorFor(path.join(REPO, "plugin", "claude-ide.yazi"))).toBe(REPO);
     const outside = tmpDir();
     expect(anchorFor(outside)).toBe(outside);
   });

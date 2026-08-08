@@ -186,7 +186,7 @@ describe("F. tools that are out of scope but still called", () => {
   test("F5 openDiff is refused, because answering it cancels the edit", () => {
     // Not an omission: a benign-looking `DIFF_REJECTED` reads to the CLI as the
     // user rejecting the change, and the edit never lands. Measured, see
-    // docs/baseline.md. -32601 is the only answer that leaves editing working.
+    // dev/docs/baseline.md. -32601 is the only answer that leaves editing working.
     expect(
       callTool(
         "openDiff",

@@ -200,7 +200,7 @@ describe("G3. polling for our yazi's absence", () => {
   });
 
   test("G3 a lone failure does not, because DDS may briefly not route", async () => {
-    // Server succession is untested (docs/yazi-capability.md), so one failure
+    // Server succession is untested (dev/docs/yazi-capability.md), so one failure
     // is not evidence that yazi is gone.
     const { fired } = await gone([false, true]);
     expect(fired).toBe(false);

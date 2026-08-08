@@ -33,7 +33,7 @@ function M:setup(opts)
 	-- Double fork. `spawn()` dies with the plugin VM and a foreground child would
 	-- block yazi's startup, so the only shape that leaves a live process behind is
 	-- nohup + `&` under a shell we wait for. That wait is instant. Measured in
-	-- docs/yazi-capability.md.
+	-- dev/docs/yazi-capability.md.
 	Command("sh")
 		:arg({ "-c", "nohup " .. command .. " >> " .. ya.quote(log) .. " 2>&1 &" })
 		:status()
