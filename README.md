@@ -7,9 +7,13 @@ manual harness live in `dev/`, which is local-only and not published.
 
 ## Setup
 
+```sh
+cargo install --path .
+```
+
 ```lua
 -- init.lua
-require("claude-ide"):setup({ command = "bun /path/to/src/sidecar.ts" })
+require("claude-ide"):setup()
 ```
 
 ```toml
@@ -34,10 +38,12 @@ The plugin never reads a file itself. Claude does, when you submit.
 ## Development
 
 ```sh
-bun install
-bun test                        # contract tests; each names the clause it covers
-bun run typecheck               # tsc --noEmit; bun test is runtime-only
-dev/manual/harness.sh verify    # the clauses only a real yazi can show
+cargo test                                  # contract tests; each names the clause it covers
+cargo clippy --all-targets -- -D warnings
+cargo fmt --check
+dev/manual/harness.sh verify                # the clauses only a real yazi can show
 ```
+
+`dev/` is absent from a fresh clone, so contributors will not have the manual harness or contract.
 
 `dev/docs/contract.md` is the specification.
