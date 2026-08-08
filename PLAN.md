@@ -108,7 +108,7 @@ The IPC hop the earlier draft assumed (unix socket, stdin/stdout) is not needed 
 3. ~~**contract**~~ — **complete.** [docs/contract.md](docs/contract.md) states the specification as numbered clauses A1–G4, so each contract test can name the clause it covers.
 4. ~~**protocol-core**~~ — **complete.** `src/lock.ts`, `src/server.ts`, and `src/tools.ts` implement the lock file lifecycle, auth, WebSocket, and JSON-RPC dispatch, with a contract test per clause.
 5. ~~**yazi-binding**~~ — **complete.** `plugin/claude-ide.yazi` double-forks the sidecar from `setup()`; `src/yazi.ts` follows this instance's `hover` and `cd` events off `ya sub`. Verified against a real yazi with `test/manual/harness.sh` — see its README for what was proved. Two corrections to the capability spike came out of it, both recorded in [docs/yazi-capability.md](docs/yazi-capability.md): `cx` does not exist in `setup()`, and the anchor therefore comes from the first `cd` event rather than from any directory the plugin could read.
-6. **resilience-validation** — in progress. The yazi half is automated and passing (`test/manual/harness.sh verify`); the three items needing a live Claude Code are open. See the verification checklist below.
+6. ~~**resilience-validation**~~ — **complete.** Every checklist item below passed. The yazi half is automated (`test/manual/harness.sh verify`); the Claude Code half was walked by hand on 2026-08-08, because `--ide` is interactive-only. One caveat came out of it that no clause covers: losing the sidecar is silent from the session's side, recorded in [docs/baseline.md](docs/baseline.md).
 
 ## Verification checklist (beyond the happy path)
 
@@ -117,11 +117,11 @@ The IPC hop the earlier draft assumed (unix socket, stdin/stdout) is not needed 
 - ~~Two concurrent yazi instances do not overwrite each other's lock file, port, or token.~~ Contract G4, `harness.sh verify` case `g4`.
 - ~~After the sidecar crashes or is killed, the next startup recognises and reclaims the stale lock.~~ Contract A7, `harness.sh verify` case `stale`.
 - ~~Both orderings work: Claude Code started first, and yazi started first.~~ **Passed 2026-08-08.** Claude-first: a session running before yazi launched adopted on `/ide`, through the cursor entry (B7). yazi-first: yazi opened inside the repository, so anchor and cursor were the same path and `workspaceFolders` held one entry (B2); a session started afterwards printed `Connected to yazi.`
-- The connection recovers after a WebSocket drop, and returns fresh data once yazi's state changes.
+- ~~The connection recovers after a WebSocket drop, and returns fresh data once yazi's state changes.~~ **Passed 2026-08-08.** A second client dropped and reconnected while an adopted session stayed live (D8); the reconnection was pushed the current file (D3), then eight further pushes as yazi's cursor moved, no path repeated (D4, D6). Walking into `src/` rewrote the cursor entry and left the anchor alone (B3). Losing the sidecar, however, is silent from the session's side — see [docs/baseline.md](docs/baseline.md).
 - ~~`/ide` finds yazi and the context updates after selecting a file.~~ **Passed 2026-08-08.** `/ide` printed `Connected to yazi.`, and moving yazi's cursor put `The user opened the file …/PLAN.md in the IDE.` into the session's context (D4, C3). Adoption came through the cursor entry, not the anchor — see contract B7.
 - ~~The sidecar exits after its yazi does, under both normal quit and `SIGKILL`, leaving no lock file behind.~~ Contract G3, `harness.sh verify` cases `quit` and `kill`. Also observed in production on 2026-08-08: quitting a real yazi put `yazi is gone, exiting` in the sidecar log and removed the lock file, outside the harness.
 
-The yazi half of this list is automated by `test/manual/harness.sh verify`, which asserts four clauses against a real yazi and exits non-zero on any failure. The Claude Code half cannot be — `--ide` is interactive-only, per task #1 — so it was walked by hand on 2026-08-08. One item is left, and it needs a human too.
+The yazi half of this list is automated by `test/manual/harness.sh verify`, which asserts four clauses against a real yazi and exits non-zero on any failure. Rerun it after touching the lock file, the liveness poll, or the plugin. The Claude Code half cannot be automated — `--ide` is interactive-only, per task #1 — so it was walked by hand on 2026-08-08 and has to be walked again by hand.
 
 ## Known gaps
 
