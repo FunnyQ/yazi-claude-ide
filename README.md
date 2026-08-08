@@ -2,7 +2,8 @@
 
 Yazi plugin that speaks Claude Code's `/ide` protocol, so Claude Code can pull context (currently focused/selected file) from [yazi](https://yazi-rs.github.io/) the same way it does from VS Code or Neovim.
 
-Status: Discovery. See [PLAN.md](PLAN.md) for scope, open questions, and task breakdown.
+Status: Discovery. The plan, the protocol measurements, the spikes, and the
+manual harness live in `dev/`, which is local-only and not published.
 
 ## Setup
 
@@ -36,7 +37,7 @@ The plugin never reads a file itself. Claude does, when you submit.
 bun install
 bun test                        # contract tests; each names the clause it covers
 bun run typecheck               # tsc --noEmit; bun test is runtime-only
-test/manual/harness.sh verify   # the clauses only a real yazi can show
+dev/manual/harness.sh verify    # the clauses only a real yazi can show
 ```
 
-[docs/contract.md](docs/contract.md) is the specification.
+`dev/docs/contract.md` is the specification.
