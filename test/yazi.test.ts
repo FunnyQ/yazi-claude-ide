@@ -1,7 +1,8 @@
-// Contract clause G2, and the parsing the DDS stream needs before it can obey it.
+// Contract clauses G2 and G3, and the parsing the DDS stream needs before it
+// can obey G2.
 import { describe, expect, test } from "bun:test";
 
-import { dispatch, parseEvent } from "../src/yazi.ts";
+import { dispatch, parseEvent, watchLiveness } from "../src/yazi.ts";
 import type { StreamHandlers } from "../src/yazi.ts";
 
 const OURS = "1754500000000000";
@@ -95,5 +96,74 @@ describe("G2. dispatching only our own instance's events", () => {
     dispatch("garbage", OURS, handlers);
     expect(hovered).toEqual([]);
     expect(entered).toEqual([]);
+  });
+});
+
+describe("G3. polling for our yazi's absence", () => {
+  // The real probe shells out to `ya emit-to`, so the poll is only unit-testable
+  // against a scripted one. What it returns per call is the whole fixture.
+  function scripted(answers: boolean[]) {
+    const asked: string[] = [];
+    let next = 0;
+    const probe = (yaziId: string) => {
+      asked.push(yaziId);
+      return Promise.resolve(answers[next++] ?? answers[answers.length - 1]);
+    };
+    return { asked, probe };
+  }
+
+  function gone(
+    answers: boolean[],
+    failuresBeforeGone = 3,
+  ): Promise<{ asked: string[]; fired: boolean }> {
+    const { asked, probe } = scripted(answers);
+    return new Promise((resolve) => {
+      const watch = watchLiveness(OURS, () => resolve({ asked, fired: true }), {
+        intervalMs: 1,
+        failuresBeforeGone,
+        probe,
+      });
+      // Long enough for far more ticks than any case here needs.
+      setTimeout(() => {
+        watch.stop();
+        resolve({ asked, fired: false });
+      }, 120);
+    });
+  }
+
+  test("G3 consecutive failures end the sidecar", async () => {
+    const { asked, fired } = await gone([false, false, false]);
+    expect(fired).toBe(true);
+    // Exactly the threshold, and every probe named our own instance.
+    expect(asked).toEqual([OURS, OURS, OURS]);
+  });
+
+  test("G3 a lone failure does not, because DDS may briefly not route", async () => {
+    // Server succession is untested (docs/yazi-capability.md), so one failure
+    // is not evidence that yazi is gone.
+    const { fired } = await gone([false, true]);
+    expect(fired).toBe(false);
+  });
+
+  test("G3 a success resets the count", async () => {
+    const { fired } = await gone([false, false, true, false, false, true]);
+    expect(fired).toBe(false);
+  });
+
+  test("G3 a live yazi is never declared gone", async () => {
+    const { fired } = await gone([true]);
+    expect(fired).toBe(false);
+  });
+
+  test("G3 stop() ends the poll", async () => {
+    const { probe, asked } = scripted([false]);
+    const watch = watchLiveness(OURS, () => expect.unreachable(), {
+      intervalMs: 1,
+      failuresBeforeGone: 3,
+      probe,
+    });
+    watch.stop();
+    await Bun.sleep(30);
+    expect(asked).toEqual([]);
   });
 });

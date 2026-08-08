@@ -12,7 +12,7 @@ import {
   writeLock,
 } from "./lock.ts";
 import { startSidecar } from "./server.ts";
-import { reveal, subscribe } from "./yazi.ts";
+import { reveal, subscribe, watchLiveness } from "./yazi.ts";
 
 const yaziId = process.env.YAZI_ID;
 if (!yaziId) {
@@ -63,11 +63,19 @@ const stream = subscribe(yaziId, {
   },
 });
 
+// G3. The double fork that keeps yazi from killing this process on startup also
+// keeps it from killing it on exit, and DDS announces no departure. So ask.
+const liveness = watchLiveness(yaziId, () => {
+  console.error("yazi-claude-ide: yazi is gone, exiting");
+  shutdown();
+});
+
 console.error(
   `yazi-claude-ide: ws://${sidecar.hostname}:${sidecar.port} yazi=${yaziId} anchor=${anchor}`,
 );
 
 function shutdown(): never {
+  liveness.stop();
   stream.stop();
   sidecar.stop();
   removeLock(dir, sidecar.port);

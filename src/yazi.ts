@@ -95,3 +95,63 @@ export function reveal(yaziId: string, filePath: string): void {
     stdio: "ignore",
   }).unref();
 }
+
+/** How often to ask whether yazi is still there. Each probe costs ~7ms. */
+export const POLL_MS = 2_000;
+
+/**
+ * A probe failure means DDS could not route to the id, which is not quite the
+ * same as yazi being gone — server succession is untested and could plausibly
+ * make a live instance briefly unroutable. Three in a row is the evidence.
+ */
+export const FAILURES_BEFORE_GONE = 3;
+
+/**
+ * G3. `ya emit-to` exits 0 for a live receiver and 1 for an unknown one, so the
+ * poll is one exit code. `noop` is a real yazi command that changes nothing.
+ */
+export function probeAlive(yaziId: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn("ya", ["emit-to", yaziId, "noop"], { stdio: "ignore" });
+    child.on("close", (code) => resolve(code === 0));
+    // `ya` off PATH is unroutable too, and leaving it unhandled would throw.
+    child.on("error", () => resolve(false));
+  });
+}
+
+export type LivenessOptions = {
+  intervalMs?: number;
+  failuresBeforeGone?: number;
+  probe?: (yaziId: string) => Promise<boolean>;
+};
+
+/** G3. Call `onGone` once yazi stops answering. DDS announces no departure. */
+export function watchLiveness(
+  yaziId: string,
+  onGone: () => void,
+  options: LivenessOptions = {},
+): Subscription {
+  const intervalMs = options.intervalMs ?? POLL_MS;
+  const limit = options.failuresBeforeGone ?? FAILURES_BEFORE_GONE;
+  const probe = options.probe ?? probeAlive;
+
+  let failures = 0;
+  let stopped = false;
+  // A tick chains the next one rather than running on an interval, so a slow
+  // probe delays the poll instead of stacking up behind it.
+  let timer = setTimeout(tick, intervalMs);
+
+  async function tick(): Promise<void> {
+    failures = (await probe(yaziId)) ? 0 : failures + 1;
+    if (stopped) return;
+    if (failures >= limit) return onGone();
+    timer = setTimeout(tick, intervalMs);
+  }
+
+  return {
+    stop() {
+      stopped = true;
+      clearTimeout(timer);
+    },
+  };
+}

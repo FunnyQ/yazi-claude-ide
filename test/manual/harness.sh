@@ -11,6 +11,7 @@
 #   ./harness.sh lock            print this instance's lock file
 #   ./harness.sh log             print the sidecar log
 #   ./harness.sh sidecar         print the sidecar process, if any
+#   ./harness.sh verify          assert the contract clauses only a real yazi shows
 #   ./harness.sh stop            quit yazi and kill the sidecar
 set -euo pipefail
 
@@ -28,13 +29,30 @@ export YCI_COMMAND="bun $REPO/src/sidecar.ts"
 
 tm() { tmux -L "$SOCKET" "$@"; }
 
+# One yazi in its own tmux session. `verify` starts a second one for G4.
+launch() { # session, directory
+	tm new-session -d -s "$1" -x 200 -y 50 \
+		"env YAZI_CONFIG_HOME=$YAZI_CONFIG_HOME CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR YCI_COMMAND='$YCI_COMMAND' yazi $2"
+}
+
+teardown() {
+	tm kill-server 2>/dev/null || true
+	pkill -f 'bun .*/src/sidecar\.ts$' 2>/dev/null || true
+	pkill -f 'ya sub hover,cd' 2>/dev/null || true
+}
+
+# The plugin writes one log per instance, and the sidecar's first line names both
+# its port and its YAZI_ID. That pair is the only instance-to-lock-file mapping.
+ids() { for f in /tmp/yazi-claude-ide-*.log; do basename "$f" .log | cut -d- -f4; done; }
+port_of() { sed -n 's|.*ws://127\.0\.0\.1:\([0-9]*\).*|\1|p' "/tmp/yazi-claude-ide-$1.log"; }
+field_of() { sed -n "s/.*\"$2\":\"\{0,1\}\([^,\"}]*\).*/\1/p" "$1"; }
+
 case "${1:-}" in
 start)
-	tm kill-server 2>/dev/null || true
+	teardown
 	mkdir -p "$CLAUDE_CONFIG_DIR/ide"
 	rm -f "$CLAUDE_CONFIG_DIR"/ide/*.lock /tmp/yazi-claude-ide-*.log
-	tm new-session -d -s "$SESSION" -x 200 -y 50 \
-		"env YAZI_CONFIG_HOME=$YAZI_CONFIG_HOME CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR YCI_COMMAND='$YCI_COMMAND' yazi $SANDBOX"
+	launch "$SESSION" "$SANDBOX"
 	sleep 4
 	echo "started"
 	;;
@@ -54,16 +72,105 @@ log)
 	cat /tmp/yazi-claude-ide-*.log 2>/dev/null || echo "no sidecar log"
 	;;
 sidecar)
-	pgrep -fl 'src/sidecar.ts' || echo "no sidecar running"
+	# The tmux command line names the sidecar too, so match how it is really run.
+	pgrep -fl 'bun .*/src/sidecar\.ts$' || echo "no sidecar running"
+	;;
+verify)
+	# The clauses a scripted probe cannot show: G3, G4, and A7 against a sidecar
+	# that really died. The unit suite injects both the liveness probe and the
+	# pid check, so only a real yazi settles these.
+	fails=0
+	ok() { echo "PASS [$1] $2"; }
+	bad() {
+		echo "FAIL [$1] $2"
+		fails=$((fails + 1))
+	}
+	# The poll is 3 failures at 2s, so ~6s; 15s leaves room for start-up jitter.
+	await_exit() { for _ in $(seq 30); do kill -0 "$1" 2>/dev/null || return 0; sleep 0.5; done; return 1; }
+
+	for path in quit kill; do
+		"$0" start >/dev/null
+		lock=$(echo "$CLAUDE_CONFIG_DIR"/ide/*.lock)
+		if [ ! -f "$lock" ]; then
+			bad "$path" "no lock file after start"
+			continue
+		fi
+		pid=$(field_of "$lock" pid)
+		id=$(ids | head -1)
+		echo "[$path] sidecar pid=$pid yazi=$id lock=$(basename "$lock")"
+
+		if [ "$path" = quit ]; then ya emit-to "$id" quit; else pkill -9 -f "^yazi $SANDBOX\$"; fi
+
+		if ! await_exit "$pid"; then
+			bad "$path" "sidecar $pid still alive after 15s"
+		elif [ -f "$lock" ]; then
+			bad "$path" "sidecar exited but left $(basename "$lock")"
+		else
+			ok "$path" "sidecar exited and removed its lock file"
+		fi
+		"$0" stop >/dev/null
+	done
+
+	# A7 end to end. Until G3 landed this could not happen — the orphan sidecar
+	# stayed alive, so its own pid check passed and its lock was never stale.
+	"$0" start >/dev/null
+	stale=$(echo "$CLAUDE_CONFIG_DIR"/ide/*.lock)
+	kill -9 "$(field_of "$stale" pid)"
+	teardown
+	sleep 1
+	if [ ! -f "$stale" ]; then
+		bad stale "killing the sidecar removed its own lock file — nothing left to reclaim"
+	else
+		"$0" start >/dev/null
+		if [ -f "$stale" ]; then
+			bad stale "startup did not reclaim $(basename "$stale")"
+		else
+			ok stale "startup reclaimed the killed sidecar's lock file"
+		fi
+	fi
+	"$0" stop >/dev/null
+
+	# G4. Two instances in different directories, so the one to be killed is
+	# addressable by its own command line. `start` clears the logs, so the id
+	# present before the second launch is the victim's.
+	"$0" start >/dev/null
+	victim_id=$(ids)
+	launch t "$SANDBOX/dir-a"
+	sleep 4
+	survivor_id=$(ids | grep -v "^$victim_id\$" || true)
+	victim="$CLAUDE_CONFIG_DIR/ide/$(port_of "$victim_id").lock"
+	survivor="$CLAUDE_CONFIG_DIR/ide/$(port_of "$survivor_id").lock"
+	echo "[g4] victim $victim_id -> $(basename "$victim"), survivor $survivor_id -> $(basename "$survivor")"
+
+	if [ -z "$survivor_id" ] || [ ! -f "$victim" ] || [ ! -f "$survivor" ]; then
+		bad g4 "the two instances did not get distinct lock files"
+	elif [ "$(field_of "$victim" authToken)" = "$(field_of "$survivor" authToken)" ]; then
+		bad g4 "the two instances share an authToken"
+	elif [ "$(field_of "$victim" pid)" = "$(field_of "$survivor" pid)" ]; then
+		bad g4 "the two instances share a sidecar"
+	else
+		ok g4 "distinct ports, tokens, and sidecars"
+		before=$(cat "$survivor")
+		pkill -9 -f "^yazi $SANDBOX\$"
+		await_exit "$(field_of "$victim" pid)" || bad g4 "the victim's sidecar outlived its yazi"
+		if [ ! -f "$survivor" ]; then
+			bad g4 "the surviving instance lost its lock file"
+		elif [ "$(cat "$survivor")" != "$before" ]; then
+			bad g4 "the surviving instance's lock file was rewritten"
+		else
+			ok g4 "the survivor is untouched by the other sidecar's exit"
+		fi
+	fi
+	"$0" stop >/dev/null
+
+	[ "$fails" -eq 0 ] || exit 1
 	;;
 stop)
-	tm kill-server 2>/dev/null || true
-	pkill -f 'src/sidecar.ts' 2>/dev/null || true
-	pkill -f 'ya sub hover,cd' 2>/dev/null || true
+	teardown
 	echo "stopped"
 	;;
 *)
-	sed -n '2,14p' "$0"
+	sed -n '2,15p' "$0"
 	exit 1
 	;;
 esac
