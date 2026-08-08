@@ -5,13 +5,39 @@
 
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
+use std::path::PathBuf;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::error::Elapsed;
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::{Error as ConnectError, Message};
-use yazi_claude_ide::server::Sidecar;
+use yazi_claude_ide::server::{Sidecar, StartOptions, start_sidecar};
+
+/// A path inside the crate root, used as a file that is certain to stat.
+pub fn fixture(name: &str) -> String {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join(name)
+        .to_string_lossy()
+        .into_owned()
+}
+
+pub async fn sidecar(token: &str, folders: Vec<String>) -> Sidecar {
+    start_sidecar(StartOptions {
+        workspace_folders: Box::new(move || folders.clone()),
+        reveal: Box::new(|_| {}),
+        auth_token: token.to_owned(),
+    })
+    .await
+    .expect("test sidecar should start")
+}
+
+pub fn assert_unauthorized(error: ConnectError) {
+    match error {
+        ConnectError::Http(response) => assert_eq!(response.status(), 401),
+        other => panic!("expected HTTP rejection, got {other}"),
+    }
+}
 
 pub struct Client {
     outgoing: mpsc::UnboundedSender<Message>,
@@ -74,6 +100,16 @@ impl Client {
 
     pub async fn silence(&mut self, dur: Duration) -> Option<Value> {
         self.next(dur).await.ok()
+    }
+
+    /// `true` once the socket has closed. The reader task drops the frame sender
+    /// when the connection ends, so a closed channel is the observable proof.
+    pub async fn closed(&mut self, wait: Duration) -> bool {
+        timeout(wait, async {
+            while self.incoming.recv().await.is_some() {}
+        })
+        .await
+        .is_ok()
     }
 
     pub async fn call(&mut self, id: i64, method: &str, params: Option<Value>) -> Value {
