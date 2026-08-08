@@ -2,7 +2,12 @@
 // can obey G2.
 import { describe, expect, test } from "bun:test";
 
-import { dispatch, parseEvent, watchLiveness } from "../src/yazi.ts";
+import {
+  MARKED_KIND,
+  dispatch,
+  parseEvent,
+  watchLiveness,
+} from "../src/yazi.ts";
 import type { StreamHandlers } from "../src/yazi.ts";
 
 const OURS = "1754500000000000";
@@ -11,11 +16,13 @@ const THEIRS = "1754599999999999";
 function collect() {
   const hovered: string[] = [];
   const entered: string[] = [];
+  const marked: string[][] = [];
   const handlers: StreamHandlers = {
     onHover: (url) => void hovered.push(url),
     onCd: (url) => void entered.push(url),
+    onMarked: (urls) => void marked.push(urls),
   };
-  return { hovered, entered, handlers };
+  return { hovered, entered, marked, handlers };
 }
 
 describe("parsing a ya sub line", () => {
@@ -96,6 +103,57 @@ describe("G2. dispatching only our own instance's events", () => {
     dispatch("garbage", OURS, handlers);
     expect(hovered).toEqual([]);
     expect(entered).toEqual([]);
+  });
+});
+
+describe("H3. the marked set arrives on its own kind", () => {
+  test("H3 a claude-marked event reaches onMarked with every path", () => {
+    const { marked, handlers } = collect();
+    dispatch(
+      `${MARKED_KIND},0,${OURS},{"urls":["/tmp/one.txt","/tmp/two.txt"]}`,
+      OURS,
+      handlers,
+    );
+    expect(marked).toEqual([["/tmp/one.txt", "/tmp/two.txt"]]);
+  });
+
+  test("H3 a claude-marked from another yazi is ignored", () => {
+    const { marked, handlers } = collect();
+    dispatch(
+      `${MARKED_KIND},0,${THEIRS},{"urls":["/tmp/one.txt"]}`,
+      OURS,
+      handlers,
+    );
+    expect(marked).toEqual([]);
+  });
+
+  test("H7 an empty set is delivered, not dropped", () => {
+    // It is the fall-back-to-hovered signal, so swallowing it here would make
+    // the keybinding do nothing whenever nothing is marked.
+    const { marked, handlers } = collect();
+    dispatch(`${MARKED_KIND},0,${OURS},{"urls":[]}`, OURS, handlers);
+    expect(marked).toEqual([[]]);
+  });
+
+  test("H3 a body with no urls list is dropped", () => {
+    const { marked, handlers } = collect();
+    dispatch(`${MARKED_KIND},0,${OURS},{"tab":0}`, OURS, handlers);
+    dispatch(
+      `${MARKED_KIND},0,${OURS},{"urls":"/tmp/one.txt"}`,
+      OURS,
+      handlers,
+    );
+    expect(marked).toEqual([]);
+  });
+
+  test("H3 a non-string entry is dropped without losing the rest", () => {
+    const { marked, handlers } = collect();
+    dispatch(
+      `${MARKED_KIND},0,${OURS},{"urls":["/tmp/one.txt",null,42]}`,
+      OURS,
+      handlers,
+    );
+    expect(marked).toEqual([["/tmp/one.txt"]]);
   });
 });
 

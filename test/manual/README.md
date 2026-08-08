@@ -34,9 +34,11 @@ the very things under test — the liveness probe and the pid check:
 | `kill` | G3, A6 | the same after `kill -9` of yazi |
 | `stale` | A7 | a `kill -9`ed sidecar leaves a lock file, and the next startup reclaims it |
 | `g4` | G4 | two instances get distinct ports, tokens, and sidecars, and one exiting leaves the other's lock file byte-identical |
+| `h` | H1-H3 | marking two files and pressing `cv` publishes `claude-marked`, and the sidecar logs the set |
 
-Drive yazi with `ya emit-to` rather than keystrokes. Keys depend on where the
-cursor happens to be; `emit-to` does not.
+The `h` case is the one that needs keystrokes: `cx.active.selected` is unreadable
+from outside yazi, so `ya emit-to` cannot build a marked set. Everything else
+uses `emit-to`, because keys depend on where the cursor happens to be.
 
 ```sh
 ID=$(grep -o 'yazi=[0-9]*' /tmp/yazi-claude-ide-*.log | head -1 | cut -d= -f2)
@@ -56,6 +58,11 @@ ya emit-to $ID reveal "$SB/two.txt"  # hover, and so a selection_changed push
   navigations, including out of the repository's own subtree.
 - `reveal` produces a `selection_changed` push carrying that file's path.
 - Directories never produce a push. Only regular files do.
+- Pressing `cv` with two files marked publishes `claude-marked` carrying both
+  absolute paths, and the sidecar logs `marked 2 file(s)`. Getting there cost a
+  silent failure worth remembering: `ps` is `nil` in the async VM `entry()` runs
+  in, and the only trace is a failed task under `w` — see
+  [../../docs/yazi-capability.md](../../docs/yazi-capability.md).
 
 ## What `verify` proved (2026-08-08)
 

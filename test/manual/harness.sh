@@ -38,7 +38,7 @@ launch() { # session, directory
 teardown() {
 	tm kill-server 2>/dev/null || true
 	pkill -f 'bun .*/src/sidecar\.ts$' 2>/dev/null || true
-	pkill -f 'ya sub hover,cd' 2>/dev/null || true
+	pkill -f 'ya sub hover,cd,claude-marked' 2>/dev/null || true
 }
 
 # The plugin writes one log per instance, and the sidecar's first line names both
@@ -160,6 +160,21 @@ verify)
 		else
 			ok g4 "the survivor is untouched by the other sidecar's exit"
 		fi
+	fi
+	"$0" stop >/dev/null
+
+	# H1-H3. The gesture only exists inside a real yazi: `cx.active.selected` is
+	# unreadable from outside, and `ps` is nil in the async VM the plugin's
+	# entry() runs in, so publishing has to happen inside the ya.sync hop. A unit
+	# test cannot see either half.
+	"$0" start >/dev/null
+	# j j lands on one.txt; space marks and steps, so two files end up marked.
+	for k in j j Space Space c v; do tm send-keys -t "$SESSION" "$k"; sleep 0.5; done
+	sleep 1
+	if grep -q 'marked 2 file(s)' /tmp/yazi-claude-ide-*.log; then
+		ok h "the marked set reached the sidecar"
+	else
+		bad h "pressing cv published nothing the sidecar saw"
 	fi
 	"$0" stop >/dev/null
 
