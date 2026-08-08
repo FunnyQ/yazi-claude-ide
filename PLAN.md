@@ -1,6 +1,6 @@
 # Yazi Claude Code IDE Plugin — PLAN
 
-> Teach Claude Code's `/ide` to recognise yazi (a terminal file manager) the way it recognises VS Code or Neovim, so it can pull context such as the currently selected file. Status: tasks #1 and #2 complete, both gates passed. Task #3 not started.
+> Teach Claude Code's `/ide` to recognise yazi (a terminal file manager) the way it recognises VS Code or Neovim, so it can pull context such as the currently selected file. Status: tasks #1, #2, and #3 complete — both gates passed and the contract is written. Task #4 (protocol-core) is next.
 
 ## Context
 
@@ -63,6 +63,8 @@ Not a gate — a follow-up measurement that closes the one question task #1 left
 
 ## MVP semantic contract (draft)
 
+> Superseded by [docs/contract.md](docs/contract.md), which is the testable form. The prose below stays as the reasoning behind it.
+
 - **Push `selection_changed` whenever focus changes.** This is the only channel that works. `getCurrentSelection` is still implemented in case Claude calls it, but measurement shows it will not.
 - The payload for both `getCurrentSelection` and the push represents only the currently focused regular file's path, excluding marked files. Multi-select waits until there is a demonstrated need, so the first version does not stretch a single-selection method into unverified multi-file semantics.
 - **`text` is always the empty string.** The push is a pointer, not a transfer. This also means the sidecar never reads user files, which keeps the whole integration to path-shaped data.
@@ -103,7 +105,7 @@ The IPC hop the earlier draft assumed (unix socket, stdin/stdout) is not needed 
 
 1. ~~**protocol-spike**~~ — **complete, passed.** See "protocol-spike result" above.
 2. ~~**yazi-capability-spike**~~ — **complete, passed.** See "yazi-capability-spike result" above.
-3. **contract** — turn the MVP semantic contract draft above into a testable specification: payload shapes, empty-value behaviour, workspace definition, error semantics.
+3. ~~**contract**~~ — **complete.** [docs/contract.md](docs/contract.md) states the specification as numbered clauses A1–G4, so each contract test can name the clause it covers.
 4. **protocol-core** — implement the lock file lifecycle, auth, WebSocket, and JSON-RPC dispatch, with contract tests.
 5. **yazi-binding** — wire up the focused file and workspace state, using a sidecar or not depending on the outcome of task #2.
 6. **resilience-validation** — see the verification checklist below.
