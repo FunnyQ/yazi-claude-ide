@@ -9,4 +9,5 @@ dev/PLAN.md
 
 # Flightplan/autopilot working material: plans, task trees, eval rubrics, and
 # the inlined contract copy the executors read. Scaffolding, not product.
-docs/
+# Anchored: an unanchored `docs/` also swallows dev/docs/, which is published.
+/docs/
