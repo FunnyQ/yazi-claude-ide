@@ -53,6 +53,16 @@ Not a gate — a follow-up measurement that closes the one question task #1 left
 1. **Adoption takes any matching entry in `workspaceFolders`, not the first one.** The lock file advertised `["/tmp/ws-decoy", "<repo root>"]` with `rootPath` also pointing at the decoy, and the session running in the repo root was still adopted. This is what makes a multi-entry policy possible at all.
 2. **Workspace drift is not a running threat.** An adopted connection is never re-checked: the user can navigate anywhere in yazi and the session stays connected. Drift only bites at the moment `/ide` is pressed after navigating away — which is exactly what the anchor + cursor pair covers.
 
+## tool-verification result (2026-08-08)
+
+Closes Definition of Done item 6. Not a gate — a measurement pass that temporarily widened `tools/list` to all eleven tools, logged every `tools/call`, and drove a real Claude Code through four `/ide` connections. Full record in [docs/baseline.md](docs/baseline.md).
+
+It found a defect that had been shipping.
+
+1. **Answering `openDiff` cancels the edit.** The CLI calls `openDiff` before every edit it needs confirmed, with only the four F1 tools advertised — advertising has nothing to do with it, exactly as with `closeAllDiffTabs`. The contract's `DIFF_REJECTED` reads to the CLI as *the user rejecting the change*, so the edit never lands. Any user with `/ide` connected to yazi would have found edits silently failing. `openDiff` now returns `-32601` (contract F5), which is both true and the only answer measured to leave editing working. `DIFF_ACCEPTED` also works and was rejected: it asserts approval for a diff nobody saw.
+2. **Four tools are genuinely never called** by 2.1.223: `getOpenEditors`, `checkDocumentDirty`, `saveDocument`, and `openFile`. The first three were probed directly — the sidecar was made to claim a dirty open editor for the file being edited, and the CLI still never asked. `openFile` is the notable one: the only out-of-scope tool yazi can honestly perform, and nothing ever calls it.
+3. **Agent-side exposure is an allowlist intersected with `tools/list`, not `tools/list`.** With all eleven advertised, `getDiagnostics` was the only tool the CLI put in front of the agent — not even the four the sidecar advertises appear. F1's rationale narrows to that one tool; it was previously generalised from it.
+
 ## Open questions (needed before implementation)
 
 1. **How does selection map?** yazi has no cursor and no text selection, only a list of marked files and a currently focused file. Settled: the MVP recognises only the focused regular file (see MVP scope below).
@@ -148,4 +158,4 @@ The yazi half of this list is automated by `test/manual/harness.sh verify`, whic
 3. Empty selection, directory focus, and unreadable files all produce well-defined responses that do not trigger a client error.
 4. Normal exit, abnormal exit, and restart never leave a stale lock that blocks connections.
 5. Two yazi instances can run at once without their tokens, ports, or lock files conflicting.
-6. Every non-MVP tool (`openFile` and friends) has an explicit, client-verified response strategy — an empty result or not-supported, never undefined behaviour.
+6. ~~Every non-MVP tool (`openFile` and friends) has an explicit, client-verified response strategy — an empty result or not-supported, never undefined behaviour.~~ **Met 2026-08-08**, and it caught a live defect — see "tool-verification result" above. Every tool has an explicit, tested response. Four are now verified against a real CLI calling them: `closeAllDiffTabs`, `openDiff`, `close_tab`, `getDiagnostics`. The rest — `getOpenEditors`, `checkDocumentDirty`, `saveDocument`, `openFile` — were measured to be **never called** by Claude Code 2.1.223, which is the strategy being verified: they are unreachable, and recorded as such rather than assumed safe.
