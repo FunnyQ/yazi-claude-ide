@@ -78,7 +78,7 @@ Moving yazi's cursor pushes `selection_changed` — **the path alone, never cont
 
 **`YCI_POLL_MS` and `YCI_FAILURES_BEFORE_GONE` exist only for the lifecycle tests**, to make liveness detection finish in about a second instead of production's measured six. Keep them in the `main.rs` wiring.
 
-**Two `lock.rs` tests use this repository's own directory layout as a fixture.** They build paths from `env!("CARGO_MANIFEST_DIR")` and expect `claude-ide.yazi/` to exist, because `anchor_for` walks the real filesystem looking for `.git`. Renaming or moving a tracked top-level directory breaks `b1_the_anchor_is_the_git_root_or_the_directory_itself` — and the `workspace_folders` test beside it keeps passing while pointing at nothing, since that function only builds strings.
+**Two `lock.rs` tests use this repository's own directory layout as a fixture.** Both build paths from `env!("CARGO_MANIFEST_DIR")` and point at `claude-ide.yazi/`. Renaming or moving a tracked top-level directory breaks `b1_the_anchor_is_the_git_root_or_the_directory_itself`: `anchor_for` shells out to `git -C <dir> rev-parse --show-toplevel`, and on a path that no longer exists git exits non-zero, so the function falls through to returning that path itself instead of the repo root. `b1_the_pair_is_anchor_then_cursor` keeps passing on the same stale path, because `workspace_folders` only builds strings and never touches disk.
 
 **Logging is `eprintln!` to stderr.** `main.lua` redirects it to `/tmp/yazi-claude-ide-<YAZI_ID>.log`. No logging framework.
 
