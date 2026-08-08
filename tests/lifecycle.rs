@@ -55,6 +55,15 @@ impl Drop for ChildGuard {
 }
 
 fn spawn_sidecar(config: &Path, yazi_id: &str, wants_liveness_exit: bool) -> ChildGuard {
+    spawn_sidecar_labelled(config, yazi_id, wants_liveness_exit, None)
+}
+
+fn spawn_sidecar_labelled(
+    config: &Path,
+    yazi_id: &str,
+    wants_liveness_exit: bool,
+    label: Option<&str>,
+) -> ChildGuard {
     // Only the liveness test gets fast failure settings. Suite cleanup must not
     // "simplify" these into one constant or the other seven processes may exit
     // before their assertions finish.
@@ -63,7 +72,14 @@ fn spawn_sidecar(config: &Path, yazi_id: &str, wants_liveness_exit: bool) -> Chi
     } else {
         ("2000", "100")
     };
-    let child = Command::new(env!("CARGO_BIN_EXE_yazi-claude-ide"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_yazi-claude-ide"));
+    // README tells users to export YCI_IDE_LABEL, so the developer running the
+    // suite may well have one. Every test states its own, or states none.
+    match label {
+        Some(label) => command.env("YCI_IDE_LABEL", label),
+        None => command.env_remove("YCI_IDE_LABEL"),
+    };
+    let child = command
         .env("CLAUDE_CONFIG_DIR", config)
         .env("YAZI_ID", yazi_id)
         .env("YCI_POLL_MS", poll_ms)
@@ -234,6 +250,17 @@ fn a1_a3_a5_the_lock_file_the_binary_writes_is_well_formed() {
         path.file_name().unwrap(),
         format!("{}.lock", port_from(&path)).as_str()
     );
+}
+
+/// The module test covers `ide_name_from`; only the compiled binary can show
+/// that `main.rs` calls it at all, which is the wiring a unit test cannot reach.
+#[test]
+fn a3_the_binary_takes_its_ide_name_from_yci_ide_label() {
+    let temp = TempDir::new().unwrap();
+    let _child =
+        spawn_sidecar_labelled(temp.path(), "lifecycle-ide-label", false, Some(" w41:t6 "));
+    let lock = read_lock(&wait_for_one_lock(temp.path()));
+    assert_eq!(lock.ide_name, "yazi (w41:t6)");
 }
 
 #[tokio::test]
