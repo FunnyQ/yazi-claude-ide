@@ -2,6 +2,7 @@
 .handoffs/
 .cockpit/
 node_modules/
+/target
 
 # Local development material: the plan, the measurement docs, the spikes, and
 # the manual harness. Present in a working copy, never published.
