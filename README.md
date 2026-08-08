@@ -4,6 +4,26 @@ Yazi plugin that speaks Claude Code's `/ide` protocol, so Claude Code can pull c
 
 Status: Discovery. See [PLAN.md](PLAN.md) for scope, open questions, and task breakdown.
 
+## Setup
+
+```lua
+-- init.lua
+require("claude-ide"):setup({ command = "bun /path/to/src/sidecar.ts" })
+```
+
+```toml
+# keymap.toml — sends the marked files to Claude as @-mentions
+[[mgr.prepend_keymap]]
+on = ["c", "v"]
+run = "plugin claude-ide"
+desc = "Send the marked files to Claude"
+```
+
+Moving the cursor tells Claude which file you are looking at, with no keypress.
+The keybinding is for the other case: mark files with `space`, press `cv`, and
+each one arrives as an `@file` mention in the prompt. With nothing marked it
+sends the file under the cursor.
+
 ## Development
 
 ```sh
