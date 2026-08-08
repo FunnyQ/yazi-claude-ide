@@ -116,12 +116,12 @@ The IPC hop the earlier draft assumed (unix socket, stdin/stdout) is not needed 
 - ~~The server binds loopback only, and a wrong token cannot connect.~~ Contract A5 and E1, `test/server.test.ts`.
 - ~~Two concurrent yazi instances do not overwrite each other's lock file, port, or token.~~ Contract G4, `harness.sh verify` case `g4`.
 - ~~After the sidecar crashes or is killed, the next startup recognises and reclaims the stale lock.~~ Contract A7, `harness.sh verify` case `stale`.
-- Both orderings work: Claude Code started first, and yazi started first.
+- ~~Both orderings work: Claude Code started first, and yazi started first.~~ **Passed 2026-08-08.** Claude-first: a session running before yazi launched adopted on `/ide`, through the cursor entry (B7). yazi-first: yazi opened inside the repository, so anchor and cursor were the same path and `workspaceFolders` held one entry (B2); a session started afterwards printed `Connected to yazi.`
 - The connection recovers after a WebSocket drop, and returns fresh data once yazi's state changes.
-- `/ide` finds yazi and the context updates after selecting a file. This was the original happy-path manual test; it is kept, but it is not the only verification.
-- ~~The sidecar exits after its yazi does, under both normal quit and `SIGKILL`, leaving no lock file behind.~~ Contract G3, `harness.sh verify` cases `quit` and `kill`.
+- ~~`/ide` finds yazi and the context updates after selecting a file.~~ **Passed 2026-08-08.** `/ide` printed `Connected to yazi.`, and moving yazi's cursor put `The user opened the file …/PLAN.md in the IDE.` into the session's context (D4, C3). Adoption came through the cursor entry, not the anchor — see contract B7.
+- ~~The sidecar exits after its yazi does, under both normal quit and `SIGKILL`, leaving no lock file behind.~~ Contract G3, `harness.sh verify` cases `quit` and `kill`. Also observed in production on 2026-08-08: quitting a real yazi put `yazi is gone, exiting` in the sidecar log and removed the lock file, outside the harness.
 
-The yazi half of this list is automated by `test/manual/harness.sh verify`, which asserts the four clauses above against a real yazi and exits non-zero on any failure. The Claude Code half cannot be — `--ide` is interactive-only, per task #1 — so the three remaining items need a human.
+The yazi half of this list is automated by `test/manual/harness.sh verify`, which asserts four clauses against a real yazi and exits non-zero on any failure. The Claude Code half cannot be — `--ide` is interactive-only, per task #1 — so it was walked by hand on 2026-08-08. One item is left, and it needs a human too.
 
 ## Known gaps
 
