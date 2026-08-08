@@ -1,7 +1,6 @@
 .DS_Store
 .handoffs/
 .cockpit/
-node_modules/
 /target
 
 # Local development material: the plan, the measurement docs, the spikes, and
