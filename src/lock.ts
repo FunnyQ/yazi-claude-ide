@@ -87,14 +87,19 @@ export function removeLock(dir: string, port: number): void {
   }
 }
 
-/** Replace the cursor entry, keep the anchor and everything else (B3, B4). */
-export function rewriteCursor(dir: string, port: number, cursor: string): void {
+/**
+ * Republish the folder pair, keeping pid, token, and everything else (B3, B4).
+ * The caller owns which entry is the anchor: the anchor is only knowable from
+ * yazi's first `cd` event, so the lock file cannot be the source of truth for it.
+ */
+export function updateFolders(
+  dir: string,
+  port: number,
+  folders: string[],
+): void {
   const lock = readLock(dir, port);
   if (!lock) return;
-  writeLock(dir, port, {
-    ...lock,
-    workspaceFolders: workspaceFolders(lock.workspaceFolders[0]!, cursor),
-  });
+  writeLock(dir, port, { ...lock, workspaceFolders: folders });
 }
 
 function pidAlive(pid: number): boolean {

@@ -11,7 +11,7 @@ import {
   readLock,
   reclaimStale,
   removeLock,
-  rewriteCursor,
+  updateFolders,
   workspaceFolders,
   writeLock,
 } from "../src/lock.ts";
@@ -124,22 +124,28 @@ describe("B. workspace folders", () => {
     expect(workspaceFolders(REPO, REPO)).toEqual([REPO]);
   });
 
-  test("B3 rewriteCursor replaces the cursor and keeps the anchor", () => {
+  test("B3 updateFolders republishes the pair the caller computed", () => {
     const dir = tmpDir();
     lock(dir, workspaceFolders(REPO, REPO));
 
-    rewriteCursor(dir, 41234, path.join(REPO, "spike"));
+    updateFolders(dir, 41234, workspaceFolders(REPO, path.join(REPO, "spike")));
     expect(readLock(dir, 41234)?.workspaceFolders).toEqual([
       REPO,
       path.join(REPO, "spike"),
     ]);
 
-    rewriteCursor(dir, 41234, "/tmp");
+    updateFolders(dir, 41234, workspaceFolders(REPO, "/tmp"));
     expect(readLock(dir, 41234)?.workspaceFolders).toEqual([REPO, "/tmp"]);
 
     // Back to the anchor: the pair collapses again rather than duplicating.
-    rewriteCursor(dir, 41234, REPO);
+    updateFolders(dir, 41234, workspaceFolders(REPO, REPO));
     expect(readLock(dir, 41234)?.workspaceFolders).toEqual([REPO]);
+  });
+
+  test("B3 updateFolders on a lock file that is gone is a no-op", () => {
+    const dir = tmpDir();
+    expect(() => updateFolders(dir, 41234, [REPO])).not.toThrow();
+    expect(readLock(dir, 41234)).toBeNull();
   });
 
   test("B4 the rewrite preserves pid and authToken, and the file mode", () => {
@@ -147,7 +153,7 @@ describe("B. workspace folders", () => {
     const file = lock(dir, workspaceFolders(REPO, REPO));
     const before = readLock(dir, 41234)!;
 
-    rewriteCursor(dir, 41234, "/tmp");
+    updateFolders(dir, 41234, workspaceFolders(REPO, "/tmp"));
 
     const after = readLock(dir, 41234)!;
     expect(after.pid).toBe(before.pid);
