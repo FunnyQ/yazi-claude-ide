@@ -99,7 +99,7 @@ pub fn exists(file_path: &str) -> bool {
     fs::metadata(file_path).is_ok()
 }
 
-fn is_file(file_path: &str) -> bool {
+pub fn is_file(file_path: &str) -> bool {
     // Use stat rather than inspecting the link itself: a symlink to a regular file is a file (B5).
     // The error catch matters because ENOTDIR, ELOOP, and EACCES must not kill the
     // sidecar; C5 calls all of them "no active editor" (B5, C5, E5).
@@ -137,12 +137,7 @@ pub fn selection_payload(file_path: Option<&str>) -> SelectionPayload {
 }
 
 fn as_text(value: &Value) -> ToolResult {
-    ToolResult {
-        content: vec![ContentBlock {
-            kind: "text".to_owned(),
-            text: value.to_string(),
-        }],
-    }
+    as_plain(&value.to_string())
 }
 
 fn as_plain(text: &str) -> ToolResult {
@@ -549,19 +544,7 @@ mod tests {
     }
 
     #[test]
-    fn advertised_json_structure() {
-        assert_eq!(
-            advertised_json()[0],
-            json!({
-                "name": "getCurrentSelection",
-                "description": "Get the file yazi's cursor is on",
-                "inputSchema": {"type": "object", "properties": {}},
-            })
-        );
-    }
-
-    #[test]
-    fn advertised_json_matches_advertised_constant() {
+    fn f1_advertised_json_matches_advertised_constant() {
         let tools = advertised_json();
         for (value, advertised) in tools.as_array().unwrap().iter().zip(ADVERTISED.iter()) {
             assert_eq!(value["name"], advertised.name);

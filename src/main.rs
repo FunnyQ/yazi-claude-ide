@@ -10,8 +10,15 @@ struct Folders {
     folders: Vec<String>,
 }
 
+fn folders_of(state: &Mutex<Folders>) -> Vec<String> {
+    state
+        .lock()
+        .map(|state| state.folders.clone())
+        .unwrap_or_default()
+}
+
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> std::io::Result<()> {
     let yazi_id = std::env::var("YAZI_ID").unwrap_or_default();
     if yazi_id.is_empty() {
         eprintln!("YAZI_ID is unset — the sidecar must be launched by the plugin");
@@ -41,29 +48,19 @@ async fn main() -> anyhow::Result<()> {
     let auth_token = lock::new_auth_token();
     let sidecar = Arc::new(
         start_sidecar(StartOptions {
-            workspace_folders: Box::new(move || {
-                workspace_state
-                    .lock()
-                    .map(|state| state.folders.clone())
-                    .unwrap_or_default()
-            }),
+            workspace_folders: Box::new(move || folders_of(&workspace_state)),
             reveal: Box::new(move |path| yazi::reveal(&reveal_yazi_id, path)),
-            auth_token: Some(auth_token),
-            port: None,
+            auth_token,
         })
         .await?,
     );
 
-    let folders = state
-        .lock()
-        .map(|state| state.folders.clone())
-        .unwrap_or_default();
     lock::write_lock(
         &dir,
         sidecar.port(),
         &LockFile {
             pid: std::process::id(),
-            workspace_folders: folders,
+            workspace_folders: folders_of(&state),
             ide_name: "yazi".to_owned(),
             transport: "ws".to_owned(),
             auth_token: sidecar.auth_token().to_owned(),

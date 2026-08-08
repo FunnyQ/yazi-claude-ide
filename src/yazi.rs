@@ -22,10 +22,12 @@ pub const POLL_MS: u64 = 2_000;
 /// row is the evidence — a 4s outage, 2.5x the worst measured.
 pub const FAILURES_BEFORE_GONE: u32 = 3;
 
+/// A DDS line is `kind,receiver,sender,body`. The receiver segment is skipped
+/// rather than kept: nothing downstream reads it, and hover fires on every cursor
+/// keystroke, so parsing it would allocate a `String` per keypress for no reader.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DdsEvent {
     pub kind: String,
-    pub receiver: String,
     pub sender: String,
     pub body: Map<String, Value>,
 }
@@ -42,7 +44,6 @@ pub struct StreamHandlers {
 pub struct Subscription {
     task: Option<tokio::task::JoinHandle<()>>,
     stopped: Arc<AtomicBool>,
-    on_gone_fired: Arc<AtomicBool>,
 }
 
 impl Subscription {
@@ -50,14 +51,12 @@ impl Subscription {
         Self {
             task: None,
             stopped: Arc::new(AtomicBool::new(false)),
-            on_gone_fired: Arc::new(AtomicBool::new(false)),
         }
     }
 
     /// Idempotent — stopping twice is not an error.
     pub fn stop(&self) {
         self.stopped.store(true, Ordering::Release);
-        self.on_gone_fired.store(true, Ordering::Release);
         if let Some(task) = &self.task {
             task.abort();
         }
@@ -76,7 +75,6 @@ pub fn parse_event(line: &str) -> Option<DdsEvent> {
 
     Some(DdsEvent {
         kind: line[..first].to_string(),
-        receiver: line[first + 1..second].to_string(),
         sender: line[second + 1..third].to_string(),
         body,
     })
@@ -184,7 +182,6 @@ pub fn subscribe_with(yazi_id: &str, handlers: StreamHandlers, spawn: Spawner) -
     Subscription {
         task: Some(task),
         stopped,
-        on_gone_fired: Arc::new(AtomicBool::new(false)),
     }
 }
 
@@ -245,15 +242,6 @@ pub struct LivenessOptions {
     pub failures_before_gone: u32,
 }
 
-impl Default for LivenessOptions {
-    fn default() -> Self {
-        Self {
-            interval_ms: POLL_MS,
-            failures_before_gone: FAILURES_BEFORE_GONE,
-        }
-    }
-}
-
 pub fn watch_liveness<P, Fut>(
     yazi_id: &str,
     opts: LivenessOptions,
@@ -265,9 +253,7 @@ where
     Fut: std::future::Future<Output = bool> + Send + 'static,
 {
     let stopped = Arc::new(AtomicBool::new(false));
-    let on_gone_fired = Arc::new(AtomicBool::new(false));
     let task_stopped = Arc::clone(&stopped);
-    let task_on_gone_fired = Arc::clone(&on_gone_fired);
     let yazi_id = yazi_id.to_string();
     let task = tokio::spawn(async move {
         let mut failures = 0;
@@ -291,9 +277,9 @@ where
 
             failures += 1;
             if failures >= opts.failures_before_gone {
-                if !task_on_gone_fired.swap(true, Ordering::AcqRel)
-                    && let Some(on_gone) = on_gone.take()
-                {
+                // `on_gone` is a local `Option` in the one task that can reach it,
+                // so `take` is the whole at-most-once guarantee.
+                if let Some(on_gone) = on_gone.take() {
                     on_gone();
                 }
                 break;
@@ -304,21 +290,7 @@ where
     Subscription {
         task: Some(task),
         stopped,
-        on_gone_fired,
     }
-}
-
-/// The production wiring: the real probe, the measured interval and threshold.
-pub fn watch_liveness_default(
-    yazi_id: &str,
-    on_gone: impl FnOnce() + Send + 'static,
-) -> Subscription {
-    watch_liveness(
-        yazi_id,
-        LivenessOptions::default(),
-        |id| async move { probe_alive(&id).await },
-        on_gone,
-    )
 }
 
 #[cfg(test)]
@@ -348,12 +320,26 @@ mod tests {
         }
     }
 
+    fn marks() -> Arc<Mutex<Vec<Vec<String>>>> {
+        Arc::new(Mutex::new(Vec::new()))
+    }
+
     fn empty_handlers() -> StreamHandlers {
-        handlers(
-            calls(),
-            calls(),
-            Arc::new(Mutex::new(Vec::<Vec<String>>::new())),
-        )
+        handlers(calls(), calls(), marks())
+    }
+
+    /// Handlers wired so only the hover sink is observable.
+    fn hover_probe() -> (Arc<Mutex<Vec<String>>>, StreamHandlers) {
+        let hover = calls();
+        let handlers = handlers(Arc::clone(&hover), calls(), marks());
+        (hover, handlers)
+    }
+
+    /// Handlers wired so only the marked sink is observable.
+    fn marked_probe() -> (Arc<Mutex<Vec<Vec<String>>>>, StreamHandlers) {
+        let marked = marks();
+        let handlers = handlers(calls(), calls(), Arc::clone(&marked));
+        (marked, handlers)
     }
 
     #[test]
@@ -365,7 +351,6 @@ mod tests {
     fn g2_parse_event_hover() {
         let event = parse_event(r#"hover,0,175,{"tab":0,"url":"/tmp/one.txt"}"#).unwrap();
         assert_eq!(event.kind, "hover");
-        assert_eq!(event.receiver, "0");
         assert_eq!(event.sender, "175");
         assert_eq!(event.body["url"], "/tmp/one.txt");
     }
@@ -406,24 +391,14 @@ mod tests {
 
     #[test]
     fn g2_hover_from_our_instance() {
-        let hover = calls();
-        let handlers = handlers(
-            Arc::clone(&hover),
-            calls(),
-            Arc::new(Mutex::new(Vec::new())),
-        );
+        let (hover, handlers) = hover_probe();
         dispatch(r#"hover,0,ours,{"url":"/tmp/one.txt"}"#, "ours", &handlers);
         assert_eq!(*hover.lock().unwrap(), ["/tmp/one.txt"]);
     }
 
     #[test]
     fn g2_hover_from_other_instance() {
-        let hover = calls();
-        let handlers = handlers(
-            Arc::clone(&hover),
-            calls(),
-            Arc::new(Mutex::new(Vec::new())),
-        );
+        let (hover, handlers) = hover_probe();
         dispatch(
             r#"hover,0,theirs,{"url":"/tmp/one.txt"}"#,
             "ours",
@@ -442,48 +417,28 @@ mod tests {
 
     #[test]
     fn g2_absent_url_dropped() {
-        let hover = calls();
-        let handlers = handlers(
-            Arc::clone(&hover),
-            calls(),
-            Arc::new(Mutex::new(Vec::new())),
-        );
+        let (hover, handlers) = hover_probe();
         dispatch(r#"hover,0,ours,{"tab":0}"#, "ours", &handlers);
         assert!(hover.lock().unwrap().is_empty());
     }
 
     #[test]
     fn g2_empty_url_dropped() {
-        let hover = calls();
-        let handlers = handlers(
-            Arc::clone(&hover),
-            calls(),
-            Arc::new(Mutex::new(Vec::new())),
-        );
+        let (hover, handlers) = hover_probe();
         dispatch(r#"hover,0,ours,{"url":""}"#, "ours", &handlers);
         assert!(hover.lock().unwrap().is_empty());
     }
 
     #[test]
     fn g2_null_url_dropped() {
-        let hover = calls();
-        let handlers = handlers(
-            Arc::clone(&hover),
-            calls(),
-            Arc::new(Mutex::new(Vec::new())),
-        );
+        let (hover, handlers) = hover_probe();
         dispatch(r#"hover,0,ours,{"url":null}"#, "ours", &handlers);
         assert!(hover.lock().unwrap().is_empty());
     }
 
     #[test]
     fn g2_dispatch_unknown_kind_ignored() {
-        let hover = calls();
-        let handlers = handlers(
-            Arc::clone(&hover),
-            calls(),
-            Arc::new(Mutex::new(Vec::new())),
-        );
+        let (hover, handlers) = hover_probe();
         dispatch(r#"rename,0,ours,{"url":"/tmp/one"}"#, "ours", &handlers);
         assert!(hover.lock().unwrap().is_empty());
     }
@@ -495,8 +450,7 @@ mod tests {
 
     #[test]
     fn h3_marked_event_reaches_on_marked() {
-        let marked = Arc::new(Mutex::new(Vec::new()));
-        let handlers = handlers(calls(), calls(), Arc::clone(&marked));
+        let (marked, handlers) = marked_probe();
         dispatch(
             r#"claude-marked,0,ours,{"urls":["/tmp/one","/tmp/two"]}"#,
             "ours",
@@ -507,8 +461,7 @@ mod tests {
 
     #[test]
     fn h3_marked_from_other_instance() {
-        let marked = Arc::new(Mutex::new(Vec::new()));
-        let handlers = handlers(calls(), calls(), Arc::clone(&marked));
+        let (marked, handlers) = marked_probe();
         dispatch(
             r#"claude-marked,0,theirs,{"urls":["/tmp/one"]}"#,
             "ours",
@@ -519,16 +472,14 @@ mod tests {
 
     #[test]
     fn h7_empty_marked_set_delivered() {
-        let marked = Arc::new(Mutex::new(Vec::new()));
-        let handlers = handlers(calls(), calls(), Arc::clone(&marked));
+        let (marked, handlers) = marked_probe();
         dispatch(r#"claude-marked,0,ours,{"urls":[]}"#, "ours", &handlers);
         assert_eq!(*marked.lock().unwrap(), [Vec::<String>::new()]);
     }
 
     #[test]
     fn h3_marked_without_urls_dropped() {
-        let marked = Arc::new(Mutex::new(Vec::new()));
-        let handlers = handlers(calls(), calls(), Arc::clone(&marked));
+        let (marked, handlers) = marked_probe();
         dispatch(
             r#"claude-marked,0,ours,{"url":"/tmp/one"}"#,
             "ours",
@@ -539,8 +490,7 @@ mod tests {
 
     #[test]
     fn h3_marked_with_non_string_entry_filtered() {
-        let marked = Arc::new(Mutex::new(Vec::new()));
-        let handlers = handlers(calls(), calls(), Arc::clone(&marked));
+        let (marked, handlers) = marked_probe();
         dispatch(
             r#"claude-marked,0,ours,{"urls":["/tmp/one.txt",null,42]}"#,
             "ours",
@@ -551,8 +501,7 @@ mod tests {
 
     #[test]
     fn h3_marked_branch_before_url_check() {
-        let marked = Arc::new(Mutex::new(Vec::new()));
-        let handlers = handlers(calls(), calls(), Arc::clone(&marked));
+        let (marked, handlers) = marked_probe();
         dispatch(
             r#"claude-marked,0,ours,{"urls":["/tmp/one"]}"#,
             "ours",
