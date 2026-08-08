@@ -3,12 +3,6 @@
 version = 4
 
 [[package]]
-name = "anyhow"
-version = "1.0.104"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
-
-[[package]]
 name = "bitflags"
 version = "2.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -517,14 +511,12 @@ dependencies = [
 name = "yazi-claude-ide"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "futures-util",
  "getrandom",
  "libc",
  "serde",
  "serde_json",
  "tempfile",
- "thiserror",
  "tokio",
  "tokio-tungstenite",
 ]

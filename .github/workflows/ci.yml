@@ -42,16 +42,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify runner architecture
-        run: uname -m
-
-      - name: Add macOS arm64 target
-        run: rustup target add aarch64-apple-darwin
-
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: clippy, rustfmt
+          targets: aarch64-apple-darwin
 
       - name: Build release binary
         run: cargo build --release --target aarch64-apple-darwin
