@@ -19,7 +19,7 @@ case "${os}/${arch}" in
   Linux/aarch64|Linux/arm64) target="aarch64-unknown-linux-musl" ;;
   *) die "no prebuilt binary for ${os}/${arch} — published targets are macOS arm64,
   Linux x86_64, and Linux arm64.
-  Build it instead: cargo install --git https://github.com/${REPO}" ;;
+  Build it instead: cargo install --root \$HOME/.local --git https://github.com/${REPO}" ;;
 esac
 
 command -v curl >/dev/null || die "curl is required"
@@ -50,3 +50,11 @@ case ":${PATH}:" in
   *) printf '\n%s is not on your PATH. Add this to your shell profile:\n\n  export PATH="%s:$PATH"\n' \
        "$INSTALL_DIR" "$INSTALL_DIR" ;;
 esac
+
+# A second copy earlier on PATH — a leftover `cargo install` in ~/.cargo/bin, say —
+# wins silently: yazi keeps forking the old binary and nothing reports a version.
+resolved=$(command -v yazi-claude-ide 2>/dev/null || true)
+if [ -n "$resolved" ] && [ "$resolved" != "${INSTALL_DIR}/yazi-claude-ide" ]; then
+  printf '\nWarning: %s comes first on your PATH, so yazi will run that one.\n  Delete it, or move %s ahead of it.\n' \
+    "$resolved" "$INSTALL_DIR"
+fi

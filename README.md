@@ -29,8 +29,14 @@ libraries. On any other platform — or if you would rather read the source than
 pipe it to a shell — build it:
 
 ```sh
-cargo install --git https://github.com/FunnyQ/yazi-claude-ide
+cargo install --root ~/.local --git https://github.com/FunnyQ/yazi-claude-ide
 ```
+
+`--root ~/.local` lands the binary in the same `~/.local/bin` the script uses.
+Without it cargo installs to `~/.cargo/bin`, and if both copies exist, whichever
+directory comes first on your `PATH` wins — cargo will report success while yazi
+keeps forking the other one. Upgrading is the same command; `install.sh` warns
+when it finds a copy shadowing the one it just wrote.
 
 **3. The config**, in `~/.config/yazi/`:
 
@@ -51,25 +57,6 @@ Start yazi, then run `claude` in another pane — it finds the sidecar on its ow
 Verified against Claude Code 2.1.226; the `/ide` protocol has no published
 specification, so a newer CLI can change what it expects without notice.
 
-**Running two yazi instances in one repository?** The CLI auto-connects only
-when one lock file matches, so `/ide` asks instead — and both rows read `yazi`
-followed by the same repository path, because that path is the anchor and the
-anchor is the same. Name the panes with `YCI_IDE_LABEL`:
-
-```sh
-export YCI_IDE_LABEL=api      # in one pane's yazi
-export YCI_IDE_LABEL=web      # in the other's
-```
-
-The rows become `yazi (api)` and `yazi (web)`. Any string works; the sidecar
-reads this one variable and nothing else, so if your terminal or multiplexer
-already exports a per-pane identifier you can hand it that instead — 
-`YCI_IDE_LABEL="$TMUX_PANE"` — and read the same variable in the pane you are
-typing in to know which row is yours. Unset or blank, the name stays `yazi`.
-
-The picker also ticks the connection the session already holds, which answers
-the same question whenever the rows are distinguishable at all.
-
 Two channels, and they do different things:
 
 - **Moving the cursor** tells Claude *which file you are looking at* — the path
@@ -80,6 +67,34 @@ Two channels, and they do different things:
   sits on, folders included.
 
 The plugin never reads a file itself. Claude does, when you submit.
+
+## Two yazi instances in one repository
+
+**Claude Code cannot pick between them, and this plugin cannot make it.** The
+CLI adopts an IDE by matching a lock file's `workspaceFolders` against the
+session's working directory, and it connects without asking only when exactly
+one lock file matches. Two yazi instances open on the same repository both
+advertise that repository, so both match and `/ide` shows a picker. Nothing the
+sidecar writes changes this: it cannot know which session will connect, and the
+lock file has no field for *serve only this pane*. A fix would have to happen in
+the CLI.
+
+What is fixable is telling the rows apart, since both otherwise read `yazi`
+followed by the same repository path. Name the panes:
+
+```sh
+export YCI_IDE_LABEL=api      # in one pane's yazi
+export YCI_IDE_LABEL=web      # in the other's
+```
+
+The rows become `yazi (api)` and `yazi (web)`. Any string works. The sidecar
+reads this one variable and nothing else, so if your terminal or multiplexer
+exports a per-pane identifier you can forward that instead —
+`YCI_IDE_LABEL="$TMUX_PANE"` — and read the same variable in the pane you are
+typing in to know which row is yours. Unset or blank, the name stays `yazi`.
+
+The picker also ticks the connection the session already holds, which answers
+the same question whenever the rows are distinguishable at all.
 
 ## Development
 
