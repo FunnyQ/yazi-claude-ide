@@ -1,37 +1,14 @@
 mod common;
 
-use common::Client;
+use common::{Client, assert_unauthorized, fixture};
 use serde_json::{Value, json};
-use std::path::PathBuf;
 use std::time::Duration;
-use tokio_tungstenite::tungstenite::Error;
-use yazi_claude_ide::server::{Sidecar, StartOptions, start_sidecar};
+use yazi_claude_ide::server::Sidecar;
 
 const TOKEN: &str = "rpc-test-token";
 
-fn fixture(name: &str) -> String {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join(name)
-        .to_string_lossy()
-        .into_owned()
-}
-
 async fn sidecar() -> Sidecar {
-    start_sidecar(StartOptions {
-        workspace_folders: Box::new(|| vec![fixture("Cargo.toml")]),
-        reveal: Box::new(|_| {}),
-        auth_token: Some(TOKEN.to_owned()),
-        port: None,
-    })
-    .await
-    .expect("test sidecar should start")
-}
-
-fn assert_unauthorized(error: Error) {
-    match error {
-        Error::Http(response) => assert_eq!(response.status(), 401),
-        other => panic!("expected HTTP rejection, got {other}"),
-    }
+    common::sidecar(TOKEN, vec![fixture("Cargo.toml")]).await
 }
 
 #[tokio::test]
@@ -197,4 +174,20 @@ async fn d8_multiple_clients_can_connect_and_receive_responses() {
         .expect("second connect");
     assert!(first.call(9, "tools/list", None).await["result"].is_object());
     assert!(second.call(10, "tools/list", None).await["result"].is_object());
+}
+
+#[tokio::test]
+async fn stop_closes_an_already_open_connection() {
+    let server = sidecar().await;
+    let mut client = Client::connect(&server, TOKEN).await.expect("connect");
+    assert!(client.call(11, "tools/list", None).await["result"].is_object());
+
+    server.stop();
+    // Idempotent: the second stop must not panic on an already-taken shutdown.
+    server.stop();
+
+    assert!(
+        client.closed(Duration::from_secs(2)).await,
+        "stop() must close connections already accepted, not just the listener"
+    );
 }
