@@ -33,7 +33,7 @@ Three clauses have no automated test, on purpose: **B7** is marked `[manual]` an
 
 ## Architecture
 
-`plugin/claude-ide.yazi/main.lua` (Lua) double-forks the `yazi-claude-ide` binary and exits. The binary is the **sidecar**, and it owns everything else. The two halves talk only through yazi's DDS event stream.
+`claude-ide.yazi/main.lua` (Lua) double-forks the `yazi-claude-ide` binary and exits. The binary is the **sidecar**, and it owns everything else. The two halves talk only through yazi's DDS event stream.
 
 ```
 yazi ──ya.sync──► ps.pub_to(0, "claude-marked")        main.lua
@@ -78,10 +78,12 @@ Moving yazi's cursor pushes `selection_changed` — **the path alone, never cont
 
 **`YCI_POLL_MS` and `YCI_FAILURES_BEFORE_GONE` exist only for the lifecycle tests**, to make liveness detection finish in about a second instead of production's measured six. Keep them in the `main.rs` wiring.
 
+**Two `lock.rs` tests use this repository's own directory layout as a fixture.** They build paths from `env!("CARGO_MANIFEST_DIR")` and expect `claude-ide.yazi/` to exist, because `anchor_for` walks the real filesystem looking for `.git`. Renaming or moving a tracked top-level directory breaks `b1_the_anchor_is_the_git_root_or_the_directory_itself` — and the `workspace_folders` test beside it keeps passing while pointing at nothing, since that function only builds strings.
+
 **Logging is `eprintln!` to stderr.** `main.lua` redirects it to `/tmp/yazi-claude-ide-<YAZI_ID>.log`. No logging framework.
 
 **Failure paths mostly swallow and continue.** That is the contract's shape — the error surface stays small on purpose.
 
 ## Out of scope
 
-Do not edit `dev/docs/contract.md` to make code pass. Do not change `plugin/claude-ide.yazi/main.lua` unless a clause in section H requires it. `dev/spike/` holds measurement tools that stay on bun and are not part of the build.
+Do not edit `dev/docs/contract.md` to make code pass. Do not change `claude-ide.yazi/main.lua` unless a clause in section H requires it. `dev/spike/` holds measurement tools that stay on bun and are not part of the build.

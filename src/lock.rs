@@ -334,7 +334,7 @@ mod tests {
     #[test]
     fn b1_the_pair_is_anchor_then_cursor() {
         let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let cursor = repo.join("plugin");
+        let cursor = repo.join("claude-ide.yazi");
         assert_eq!(
             workspace_folders(&repo, &cursor),
             vec![repo.display().to_string(), cursor.display().to_string()]
@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn b1_the_anchor_is_the_git_root_or_the_directory_itself() {
         let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        assert_eq!(anchor_for(&repo.join("plugin/claude-ide.yazi")), repo);
+        assert_eq!(anchor_for(&repo.join("claude-ide.yazi")), repo);
         let temp = TempDir::new().unwrap();
         assert_eq!(anchor_for(temp.path()), temp.path());
     }

@@ -8,9 +8,26 @@ harness live in `dev/`, which is local-only and not published.
 
 ## Setup
 
+Two pieces install separately: the sidecar binary Claude Code connects to, and
+the yazi plugin that launches it.
+
+**1. The sidecar.** Either build it:
+
 ```sh
-cargo install --path .
+cargo install --git https://github.com/FunnyQ/yazi-claude-ide
 ```
+
+or download the macOS arm64 binary from
+[Releases](https://github.com/FunnyQ/yazi-claude-ide/releases) and put it on your
+`PATH`. The plugin looks for `yazi-claude-ide` by name.
+
+**2. The plugin.**
+
+```sh
+ya pkg add FunnyQ/yazi-claude-ide:claude-ide
+```
+
+**3. The config**, in `~/.config/yazi/`:
 
 ```lua
 -- init.lua
@@ -24,6 +41,8 @@ on = ["c", "v"]
 run = "plugin claude-ide"
 desc = "Send the marked files to Claude"
 ```
+
+Start yazi, then run `claude` in another pane — it finds the sidecar on its own.
 
 Two channels, and they do different things:
 
