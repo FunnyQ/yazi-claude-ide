@@ -8,23 +8,26 @@ harness live in `dev/`, which is local-only and not published.
 
 ## Setup
 
-Two pieces install separately: the sidecar binary Claude Code connects to, and
-the yazi plugin that launches it.
+The plugin and the sidecar binary it launches install separately.
 
-**1. The sidecar.** Either build it:
-
-```sh
-cargo install --git https://github.com/FunnyQ/yazi-claude-ide
-```
-
-or download the macOS arm64 binary from
-[Releases](https://github.com/FunnyQ/yazi-claude-ide/releases) and put it on your
-`PATH`. The plugin looks for `yazi-claude-ide` by name.
-
-**2. The plugin.**
+**1. The plugin.**
 
 ```sh
 ya pkg add FunnyQ/yazi-claude-ide:claude-ide
+```
+
+**2. The sidecar.**
+
+```sh
+curl -sSL https://raw.githubusercontent.com/FunnyQ/yazi-claude-ide/main/install.sh | bash
+```
+
+That puts the latest macOS arm64 release in `~/.local/bin`; set `YCI_INSTALL_DIR`
+to choose somewhere else. On any other platform — or if you would rather read the
+source than pipe it to a shell — build it:
+
+```sh
+cargo install --git https://github.com/FunnyQ/yazi-claude-ide
 ```
 
 **3. The config**, in `~/.config/yazi/`:
