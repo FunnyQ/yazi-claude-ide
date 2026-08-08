@@ -19,10 +19,15 @@ run = "plugin claude-ide"
 desc = "Send the marked files to Claude"
 ```
 
-Moving the cursor tells Claude which file you are looking at, with no keypress.
-The keybinding is for the other case: mark files with `space`, press `cv`, and
-each one arrives as an `@file` mention in the prompt. With nothing marked it
-sends the file under the cursor.
+Two channels, and they do different things:
+
+- **Moving the cursor** tells Claude *which file you are looking at* — the path
+  alone, no keypress, no contents.
+- **Pressing `cv`** says *read these*. Mark files with `space`, press `cv`, and
+  each arrives as an `@file` mention; submitting the prompt makes Claude read
+  them. With nothing marked it sends the file under the cursor.
+
+The plugin never reads a file itself. Claude does, when you submit.
 
 ## Development
 
