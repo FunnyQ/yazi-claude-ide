@@ -9,7 +9,7 @@ use tokio_tungstenite::tungstenite::handshake::server::ErrorResponse;
 use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::tungstenite::{Message, Utf8Bytes};
 
-use crate::tools::{self, ToolContext};
+use crate::tools::{self, SelectionPayload, ToolContext};
 
 pub struct StartOptions {
     pub workspace_folders: Box<dyn Fn() -> Vec<String> + Send + Sync>,
@@ -56,8 +56,21 @@ impl Sidecar {
         &self.inner.auth_token
     }
 
-    pub fn set_focus(&self, _file_path: Option<&str>) {
-        todo!()
+    pub fn set_focus(&self, file_path: Option<&str>) {
+        if let Ok(mut state) = self.inner.state.lock() {
+            // Why `hovered` and `focused` are two variables. C5 makes the focused
+            // file file-only, so a directory can never reach `selection_changed`,
+            // where `filePath` claims an open editor. But the empty-marked-set
+            // fallback has to work when the user is standing on a folder — that is
+            // exactly when it is most useful. One variable serving both purposes
+            // would break one of them.
+            state.hovered = file_path.map(str::to_owned);
+            state.focused = match tools::selection_payload(file_path) {
+                SelectionPayload::Success { file_path, .. } => Some(file_path),
+                SelectionPayload::Failure { .. } => None,
+            };
+        }
+        self.inner.push();
     }
 
     pub fn focused_file(&self) -> Option<String> {
@@ -68,8 +81,33 @@ impl Sidecar {
             .and_then(|state| state.focused.clone())
     }
 
-    pub fn mention(&self, _file_paths: &[String]) {
-        todo!()
+    pub fn mention(&self, file_paths: &[String]) {
+        let paths = if file_paths.is_empty() {
+            self.inner
+                .state
+                .lock()
+                .ok()
+                .and_then(|state| state.hovered.clone())
+                .into_iter()
+                .collect::<Vec<_>>()
+        } else {
+            file_paths.to_vec()
+        };
+
+        for file_path in paths {
+            if !tools::exists(&file_path) {
+                continue;
+            }
+            // Measured: omitting them renders `@<file>`, while sending `0` for both
+            // renders `@<file>#L1`, a line anchor a marked file never meant (H4).
+            let frame = json!({
+                "jsonrpc": "2.0",
+                "method": "at_mentioned",
+                "params": { "filePath": file_path },
+            })
+            .to_string();
+            let _ = self.inner.broadcasts.send(frame);
+        }
     }
 
     pub fn stop(&self) {
@@ -81,6 +119,61 @@ impl Sidecar {
             .and_then(|mut shutdown| shutdown.take());
         if let Some(sender) = sender {
             let _ = sender.send(());
+        }
+    }
+}
+
+impl Inner {
+    /// D1-D2. `None` when there is nothing to say: nothing focused, or a path that
+    /// stopped statting since `set_focus` accepted it.
+    fn selection_frame(&self) -> Option<String> {
+        let focused = self
+            .state
+            .lock()
+            .ok()
+            .and_then(|state| state.focused.clone());
+        let SelectionPayload::Success {
+            file_path,
+            text,
+            selection,
+            ..
+        } = tools::selection_payload(focused.as_deref())
+        else {
+            return None;
+        };
+        Some(
+            json!({
+                "jsonrpc": "2.0",
+                "method": "selection_changed",
+                "params": {
+                    "text": text,
+                    "filePath": file_path,
+                    "fileUrl": format!("file://{file_path}"),
+                    "selection": selection,
+                },
+            })
+            .to_string(),
+        )
+    }
+
+    /// Broadcast a focus change. Silent with nothing new or nobody listening.
+    fn push(&self) {
+        let should_push = self
+            .state
+            .lock()
+            .ok()
+            .is_some_and(|state| state.focused != state.last_pushed && state.clients > 0);
+        if !should_push {
+            return;
+        }
+        let Some(frame) = self.selection_frame() else {
+            return;
+        };
+        if self.broadcasts.send(frame).is_err() {
+            return;
+        }
+        if let Ok(mut state) = self.state.lock() {
+            state.last_pushed = state.focused.clone();
         }
     }
 }
@@ -188,6 +281,23 @@ where
     let mut broadcasts = inner.broadcasts.subscribe();
     let (mut writer, mut reader) = socket.split();
 
+    // D3 is owed to each connection separately. A new client must be pushed the
+    // current file, even if another socket already holds it. Going through `push()`
+    // would let `last_pushed` swallow the frame, leaving the new client in the dark.
+    if let Some(frame) = inner.selection_frame() {
+        if writer
+            .send(Message::Text(Utf8Bytes::from(frame)))
+            .await
+            .is_err()
+        {
+            close_connection(&inner);
+            return;
+        }
+        if let Ok(mut state) = inner.state.lock() {
+            state.last_pushed = state.focused.clone();
+        }
+    }
+
     loop {
         tokio::select! {
             incoming = reader.next() => {
@@ -217,9 +327,16 @@ where
         }
     }
 
+    close_connection(&inner);
+}
+
+fn close_connection(inner: &Inner) {
     if let Ok(mut state) = inner.state.lock() {
         state.clients = state.clients.saturating_sub(1);
         if state.clients == 0 {
+            // The next connection is owed D3 again — one push of the then-current
+            // file. Clearing `last_pushed` ensures the next connection sees its D3
+            // push even if the focused file never changes.
             state.last_pushed = None;
         }
     }
