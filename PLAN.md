@@ -46,6 +46,13 @@ The second go/no-go gate **passed**. Full measurements are in [docs/yazi-capabil
 4. **`YAZI_ID` is inherited by plugin-spawned processes.** This is what makes the split work: `ya sub` is global across every yazi on the machine, and the sidecar can only filter its own instance's events because the plugin handed it `YAZI_ID`. A sidecar started any other way cannot.
 5. **`ya emit-to` + `ya sub` make yazi fully drivable headlessly**, unlike the Claude Code side. `spike/yazi/harness.sh` scripts the whole loop. Task #6's checklist can be automated on the yazi half.
 
+## workspace-policy probe result (2026-08-08)
+
+Not a gate — a follow-up measurement that closes the one question task #1 left open. Details in [docs/baseline.md](docs/baseline.md), payloads in `spike/fixtures/session-60429.jsonl`.
+
+1. **Adoption takes any matching entry in `workspaceFolders`, not the first one.** The lock file advertised `["/tmp/ws-decoy", "<repo root>"]` with `rootPath` also pointing at the decoy, and the session running in the repo root was still adopted. This is what makes a multi-entry policy possible at all.
+2. **Workspace drift is not a running threat.** An adopted connection is never re-checked: the user can navigate anywhere in yazi and the session stays connected. Drift only bites at the moment `/ide` is pressed after navigating away — which is exactly what the anchor + cursor pair covers.
+
 ## Open questions (needed before implementation)
 
 1. **How does selection map?** yazi has no cursor and no text selection, only a list of marked files and a currently focused file. Settled: the MVP recognises only the focused regular file (see MVP scope below).
@@ -60,7 +67,11 @@ The second go/no-go gate **passed**. Full measurements are in [docs/yazi-capabil
 - The payload for both `getCurrentSelection` and the push represents only the currently focused regular file's path, excluding marked files. Multi-select waits until there is a demonstrated need, so the first version does not stretch a single-selection method into unverified multi-file semantics.
 - **`text` is always the empty string.** The push is a pointer, not a transfer. This also means the sidecar never reads user files, which keeps the whole integration to path-shaped data.
 - When focus lands on a directory, or the file is missing or unreadable, return a well-defined empty or null result rather than raising a client error.
-- ~~A workspace folder is defined as yazi's cwd at plugin startup.~~ **Superseded — this one is open, and task #3 has to settle it.** A workspace fixed at startup is what task #1 proved makes `/ide` refuse the connection once the user navigates away. Task #2 proved the sidecar can rewrite `workspaceFolders` on every `cd`. What is undecided is the policy: rewrite on each `cd`, declare several folders at once, or pin the workspace to a git root and ignore navigation inside it. Each has a different failure mode when Claude's cwd and yazi's cwd are legitimately different.
+- ~~A workspace folder is defined as yazi's cwd at plugin startup.~~ **Superseded. Settled: `workspaceFolders` holds two entries, an anchor and a cursor.**
+  - **Anchor** — the git root of the directory yazi started in, or that directory itself when it is not in a repo. Written once, never rewritten.
+  - **Cursor** — yazi's current directory. Rewritten on every `cd`.
+  - Adoption takes **any** entry that matches, so the pair covers both failure modes a single entry leaves open: the anchor catches a Claude session started at the project root while yazi sits deep in a subtree, and the cursor catches a session started in a monorepo subdirectory or a sibling project. Measured, see [docs/baseline.md](docs/baseline.md).
+  - The cost is one extra lock-file entry. The rewrite mechanism itself was already measured working in task #2.
 - Normalise all paths. Treat symlinks and files outside the workspace as valid input and return them directly, rather than designing unverified boundary rules up front.
 
 ## Architecture (settled by task #2)
@@ -83,7 +94,7 @@ Claude Code CLI (ws://127.0.0.1:<port>)
 - The plugin's only indispensable job is launching the sidecar with `YAZI_ID` in scope. It cannot hold the process itself.
 - The sidecar reads state off `ya sub`, filtering on the `sender` field. It never needs a private IPC channel for the MVP payload, because `hover` and `cd` already carry the path.
 - The sidecar owns the lock file lifecycle, token generation, the WebSocket server, and responses to Claude's calls — the role `spike/fake-ide.ts` already fills.
-- On `cd`, the sidecar rewrites the lock file's `workspaceFolders`. This is how the workspace-drift constraint (Known gaps #5) gets handled.
+- On `cd`, the sidecar rewrites the lock file's `workspaceFolders` **cursor entry only**, leaving the anchor entry alone. This is how the workspace-drift constraint (Known gaps #5) gets handled.
 - **The sidecar must terminate itself.** A double-forked child outlives both a normal quit and `SIGKILL` of yazi, and DDS emits no departure event, so the sidecar has to poll for its yazi's absence.
 
 The IPC hop the earlier draft assumed (unix socket, stdin/stdout) is not needed for the MVP. If the plugin later has to send something DDS does not carry — marked files, file contents — `ps.pub_to(0, "<kind>", table)` delivers an arbitrary Lua table to the sidecar's `ya sub`, measured working.
@@ -116,7 +127,9 @@ The yazi half of this list can be automated: `ya emit-to` drives yazi and `ya su
 2. ~~Whether the yazi plugin API can run a long-lived background process is unverified~~ **Answered: it cannot.** See the capability spike result above. The risk moved rather than closed — the sidecar now outlives yazi instead, and cleaning it up is `resilience-validation` work.
 3. IDE semantics are inherently incomplete on yazi — no cursor, no LSP. This has to be accepted as a file-manager-grade integration, not a full IDE integration.
 4. ~~Whether returning a path from `getCurrentSelection` is enough~~ **Answered:** the path does appear in the context (`The user opened the file <path> in the IDE.`), but the file contents do not. Claude does not read the file once it has the path. To get contents into the context, the plugin must read the file and fill `text`.
-5. ~~The condition for `/ide` adopting a connection was not isolated~~ **Answered:** the condition is that the lock file's `workspaceFolders` matches the Claude session's cwd. A successful socket handshake does not imply adoption. Neither the CLI's failure message (`IDE selection cancelled`) nor a session's own account of its state is trustworthy — only the IDE-side server log is. **Mechanism now settled:** the sidecar receives a `cd` event carrying the new cwd and rewrites the lock file. Measured working in task #2. What remains for `yazi-binding` is the policy — rewrite on every `cd`, or declare multiple workspace folders — not the capability.
+5. ~~The condition for `/ide` adopting a connection was not isolated~~ **Answered and closed.** The condition is that **some** entry in the lock file's `workspaceFolders` matches the Claude session's cwd. A successful socket handshake does not imply adoption. Neither the CLI's failure message (`IDE selection cancelled`) nor a session's own account of its state is trustworthy — only the IDE-side server log is. The mechanism (rewrite on `cd`) was measured in task #2; the policy (anchor + cursor) is settled in the MVP semantic contract above.
+
+   Two loose ends remain, neither blocking the MVP. **When the CLI re-reads the lock file is unmeasured** — it certainly reads on connect, so the lock file has to stay in an acceptable state at all times. The anchor + cursor policy satisfies that by construction, which is why it costs nothing extra. **Whether a connected-but-unadopted socket gets adopted retroactively** once the lock file starts matching is also unmeasured; the MVP never depends on it, because the user reaches for `/ide` after navigating, not before.
 
 6. **The sidecar outlives yazi and nothing cleans it up.** A double-forked child survives normal quit and `SIGKILL`, and DDS emits no departure event — no `bye`, and no refreshed `hey` roster when a peer leaves. The sidecar must poll for its yazi's absence. Belongs to `resilience-validation`.
 
