@@ -104,10 +104,13 @@ describe("G3. polling for our yazi's absence", () => {
   // against a scripted one. What it returns per call is the whole fixture.
   function scripted(answers: boolean[]) {
     const asked: string[] = [];
-    let next = 0;
+    const queue = [...answers];
+    let last = false;
     const probe = (yaziId: string) => {
       asked.push(yaziId);
-      return Promise.resolve(answers[next++] ?? answers[answers.length - 1]);
+      // The script runs out before the poll does; the last answer then repeats.
+      last = queue.shift() ?? last;
+      return Promise.resolve(last);
     };
     return { asked, probe };
   }

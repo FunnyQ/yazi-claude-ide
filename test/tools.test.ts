@@ -17,11 +17,16 @@ function ctx(focused: string | null, revealed: string[] = []): ToolContext {
   };
 }
 
-/** MCP wraps every result in a text block; the payload is JSON inside it. */
+/** MCP wraps every result in a text block. A missing one is the test failing. */
+function textOf(result: ReturnType<typeof callTool>): string {
+  const text = result?.content[0]?.text;
+  if (text === undefined) throw new Error("tool returned no text block");
+  return text;
+}
+
+/** The payload is JSON inside that text block. */
 function payloadOf(result: ReturnType<typeof callTool>) {
-  return JSON.parse(
-    (result as { content: [{ text: string }] }).content[0].text,
-  );
+  return JSON.parse(textOf(result));
 }
 
 describe("C. selection payloads", () => {
@@ -140,16 +145,14 @@ describe("F. tools that are out of scope but still called", () => {
 
   test("F2 unadvertised-but-called tools answer instead of erroring", () => {
     const c = ctx(FILE);
-    const textOf = (name: string, args = {}) =>
-      (callTool(name, args, c) as { content: [{ text: string }] }).content[0]
-        .text;
+    const answer = (name: string, args = {}) => textOf(callTool(name, args, c));
 
-    expect(textOf("closeAllDiffTabs")).toBe("CLOSED_0_DIFF_TABS");
-    expect(textOf("close_tab", { tab_name: "x" })).toBe("TAB_CLOSED");
-    expect(JSON.parse(textOf("getDiagnostics"))).toEqual([]);
-    expect(textOf("openDiff")).toBe("DIFF_REJECTED");
+    expect(answer("closeAllDiffTabs")).toBe("CLOSED_0_DIFF_TABS");
+    expect(answer("close_tab", { tab_name: "x" })).toBe("TAB_CLOSED");
+    expect(JSON.parse(answer("getDiagnostics"))).toEqual([]);
+    expect(answer("openDiff")).toBe("DIFF_REJECTED");
     for (const name of ["checkDocumentDirty", "saveDocument"]) {
-      expect(JSON.parse(textOf(name, { filePath: FILE }))).toEqual({
+      expect(JSON.parse(answer(name, { filePath: FILE }))).toEqual({
         success: false,
         message: `Document not open: ${FILE}`,
       });
@@ -164,9 +167,7 @@ describe("F. tools that are out of scope but still called", () => {
       ctx(FILE, revealed),
     );
     expect(revealed).toEqual([FILE]);
-    expect((result as { content: [{ text: string }] }).content[0].text).toBe(
-      `Opened file: ${FILE}`,
-    );
+    expect(textOf(result)).toBe(`Opened file: ${FILE}`);
   });
 
   test("F3 openFile without a filePath reveals nothing and reports failure", () => {
