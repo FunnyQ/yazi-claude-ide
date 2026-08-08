@@ -23,9 +23,10 @@ Two channels, and they do different things:
 
 - **Moving the cursor** tells Claude *which file you are looking at* — the path
   alone, no keypress, no contents.
-- **Pressing `cv`** says *read these*. Mark files with `space`, press `cv`, and
-  each arrives as an `@file` mention; submitting the prompt makes Claude read
-  them. With nothing marked it sends the file under the cursor.
+- **Pressing `cv`** says *look at these*. Mark things with `space`, press `cv`,
+  and each arrives as an `@` mention; submitting the prompt makes Claude read a
+  file and list a directory. With nothing marked it sends whatever the cursor
+  sits on, folders included.
 
 The plugin never reads a file itself. Claude does, when you submit.
 

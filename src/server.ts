@@ -1,7 +1,7 @@
 // The WebSocket server Claude Code talks MCP over. Contract clauses A5, D, E.
 // The lock file is src/lock.ts's job; the sidecar entry point composes the two.
 import { newAuthToken } from "./lock.ts";
-import { ADVERTISED, callTool, selectionPayload } from "./tools.ts";
+import { ADVERTISED, callTool, exists, selectionPayload } from "./tools.ts";
 import type { ToolContext } from "./tools.ts";
 
 export type Sidecar = {
@@ -39,6 +39,11 @@ export function startSidecar(opts: {
   const authToken = opts.authToken ?? newAuthToken();
 
   let focused: string | null = null;
+  // Whatever yazi's cursor last sat on, directory included. Kept apart from
+  // `focused` on purpose: C5 makes the focused file file-only so a directory can
+  // never reach `selection_changed`, but H7's fallback has to work when the user
+  // is standing on a folder. One variable serving both would break one of them.
+  let hovered: string | null = null;
   // What the live connection has already been told, so the same path never goes
   // out twice in a row (D6). Cleared on disconnect: the next connection is owed
   // one push of the then-current file (D3, D7).
@@ -184,6 +189,7 @@ export function startSidecar(opts: {
     hostname: HOSTNAME,
     authToken,
     setFocus(filePath) {
+      hovered = filePath; // H7, unfiltered — a directory is a fine thing to mention
       // selectionPayload owns the "is this a file?" decision, so focus and the
       // payload can never disagree, and a stat that throws — ENOTDIR, ELOOP,
       // EACCES — clears focus instead of escaping into the DDS stream (C5, D5).
@@ -197,14 +203,15 @@ export function startSidecar(opts: {
      * the user asked again, and a press with nobody listening is simply lost.
      */
     mention(filePaths) {
-      // H7. Nothing marked means the gesture is about the file under the cursor,
-      // which is how yazi's own commands read an empty selection.
-      const paths = filePaths.length ? filePaths : focused ? [focused] : [];
+      // H7. Nothing marked means the gesture is about whatever the cursor sits
+      // on, which is how yazi's own commands read an empty selection. `hovered`
+      // rather than `focused`, so standing on a folder still sends something.
+      const paths = filePaths.length ? filePaths : hovered ? [hovered] : [];
       for (const filePath of paths) {
-        // H6, same test as C5: a directory or a vanished path is not a file to
-        // mention, and skipping it is quieter than mentioning something Claude
-        // cannot read.
-        if (!selectionPayload(filePath).success) continue;
+        // H6. Existence is the whole test: the CLI reads a mentioned file and
+        // lists a mentioned directory, so both are worth sending and only a path
+        // that has stopped statting is not.
+        if (!exists(filePath)) continue;
         for (const ws of sockets)
           send(ws, {
             jsonrpc: "2.0",

@@ -76,6 +76,20 @@ function isFile(filePath: string): boolean {
 }
 
 /**
+ * H6. Weaker than `isFile` on purpose: a mention may name a directory, and the
+ * CLI lists it. Every stat failure the comment above enumerates still means "not
+ * worth mentioning".
+ */
+export function exists(filePath: string): boolean {
+  try {
+    fs.statSync(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * C2-C5. The stat is what catches "a directory focused, or a path that no longer
  * stats" (C5) — focus is validated when it is set, but the file can vanish after.
  * It follows symlinks deliberately: the link target decides whether this is a

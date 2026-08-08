@@ -40,13 +40,14 @@ function M:setup(opts)
 end
 
 --- H2. The user's "send these to Claude" gesture. An empty set is published as
---- an empty list rather than suppressed: the sidecar turns that into the file
---- under the cursor (H7), the way yazi's own commands read an empty selection.
+--- an empty list rather than suppressed: the sidecar turns that into whatever
+--- the cursor sits on (H7), the way yazi's own commands read an empty selection.
+--- The sidecar decides, because only it knows the path still stats.
 function M:entry()
 	local n = send_marked()
 	ya.notify({
 		title = "claude-ide",
-		content = n > 0 and string.format("sent %d marked file(s)", n) or "sent the hovered file",
+		content = n > 0 and string.format("sent %d marked item(s)", n) or "sent the item under the cursor",
 		timeout = 3,
 	})
 end

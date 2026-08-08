@@ -397,24 +397,35 @@ describe("H. the at_mentioned push", () => {
     expect((await client.next()).params).toEqual({ filePath: FILE });
   });
 
-  test("H6 a directory and a path that no longer stats are skipped", async () => {
+  test("H6 a directory is mentioned like any other path", async () => {
+    // Measured: the CLI runs `ls` on a mentioned directory and `Read` on a
+    // mentioned file. C5's file-only test guards selection_changed, not this.
     const sidecar = start();
     const client = await Client.connect(sidecar);
 
-    sidecar.mention([DIR, FILE, GONE]);
+    sidecar.mention([DIR, FILE]);
+    expect((await client.next()).params).toEqual({ filePath: DIR });
     expect((await client.next()).params).toEqual({ filePath: FILE });
-    expect(await client.silence()).toBeNull();
   });
 
-  test("H6 a set of only directories sends nothing", async () => {
+  test("H6 a set of only directories still sends", async () => {
     const sidecar = start();
     const client = await Client.connect(sidecar);
 
     sidecar.mention([DIR]);
+    expect((await client.next()).params).toEqual({ filePath: DIR });
+  });
+
+  test("H6 a path that no longer stats is skipped without losing the rest", async () => {
+    const sidecar = start();
+    const client = await Client.connect(sidecar);
+
+    sidecar.mention([GONE, FILE]);
+    expect((await client.next()).params).toEqual({ filePath: FILE });
     expect(await client.silence()).toBeNull();
   });
 
-  test("H7 an empty set falls back to the focused file", async () => {
+  test("H7 an empty set falls back to the path under the cursor", async () => {
     const sidecar = start();
     sidecar.setFocus(FILE);
     const client = await Client.connect(sidecar);
@@ -424,8 +435,38 @@ describe("H. the at_mentioned push", () => {
     expect((await client.next()).params).toEqual({ filePath: FILE });
   });
 
-  test("H7 an empty set with nothing focused sends nothing", async () => {
+  test("H7 the fallback fires while the cursor sits on a directory", async () => {
+    // The case the focused file cannot serve: C5 leaves `focused` null here, so
+    // a fallback reading it would go silent exactly when the user stands on a
+    // folder — which is now a thing worth mentioning (H6).
     const sidecar = start();
+    sidecar.setFocus(DIR);
+    expect(sidecar.focusedFile()).toBeNull();
+    const client = await Client.connect(sidecar);
+
+    sidecar.mention([]);
+    expect((await client.next()).params).toEqual({ filePath: DIR });
+  });
+
+  test("H7 the cursor path is not pushed as a selection", async () => {
+    // Tracking the hovered directory must not leak into D5's stream.
+    const sidecar = start();
+    sidecar.setFocus(DIR);
+    const client = await Client.connect(sidecar);
+    expect(await client.silence()).toBeNull();
+  });
+
+  test("H7 an empty set with nothing hovered sends nothing", async () => {
+    const sidecar = start();
+    const client = await Client.connect(sidecar);
+
+    sidecar.mention([]);
+    expect(await client.silence()).toBeNull();
+  });
+
+  test("H7 a cursor path that has since vanished sends nothing", async () => {
+    const sidecar = start();
+    sidecar.setFocus(GONE);
     const client = await Client.connect(sidecar);
 
     sidecar.mention([]);
