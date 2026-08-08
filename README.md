@@ -2,8 +2,9 @@
 
 Yazi plugin that speaks Claude Code's `/ide` protocol, so Claude Code can pull context (currently focused/selected file) from [yazi](https://yazi-rs.github.io/) the same way it does from VS Code or Neovim.
 
-Status: Discovery. The plan, the protocol measurements, the spikes, and the
-manual harness live in `dev/`, which is local-only and not published.
+The sidecar is a single compiled Rust binary. There is no TypeScript and no bun
+at runtime. The plan, the protocol measurements, the spikes, and the manual
+harness live in `dev/`, which is local-only and not published.
 
 ## Setup
 
