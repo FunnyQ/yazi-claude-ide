@@ -26,6 +26,9 @@ type Rpc = {
 // 2025-03-26 is stale. Used only when a client omits its own version.
 const PROTOCOL_VERSION = "2025-11-25";
 
+/** Loopback only, never a routable interface (A5). */
+const HOSTNAME = "127.0.0.1";
+
 export function startSidecar(opts: {
   workspaceFolders: () => string[];
   reveal: (filePath: string) => void;
@@ -126,7 +129,7 @@ export function startSidecar(opts: {
   }
 
   const server = Bun.serve({
-    hostname: "127.0.0.1", // loopback only, never a routable interface (A5)
+    hostname: HOSTNAME,
     port: opts.port ?? 0,
     fetch(req, server) {
       if (req.headers.get("x-claude-code-ide-authorization") !== authToken)
@@ -174,8 +177,10 @@ export function startSidecar(opts: {
   });
 
   return {
-    port: server.port,
-    hostname: server.hostname,
+    // `server.port` is optional in Bun's type because a unix-socket server has
+    // none; this one is bound to a TCP port the OS assigned (A5).
+    port: server.port as number,
+    hostname: HOSTNAME,
     authToken,
     setFocus(filePath) {
       // selectionPayload owns the "is this a file?" decision, so focus and the

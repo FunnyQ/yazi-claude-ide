@@ -1,6 +1,7 @@
 .DS_Store
 .handoffs/
 .cockpit/
+node_modules/
 
 # Machine-local spike state: target.rb is a generated test file, state.json holds absolute paths
 spike/target.rb
