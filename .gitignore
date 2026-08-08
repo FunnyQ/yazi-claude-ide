@@ -8,3 +8,6 @@ spike/state.json
 
 # Workspace-policy spike marker, generated per run
 spike/ws-probe-*.txt
+
+# Harness-local CLAUDE_CONFIG_DIR: lock files written during manual verification
+test/manual/run/
