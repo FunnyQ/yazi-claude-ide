@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // protocol-spike: a minimal fake IDE, built to answer one question — if we hand
 // Claude only a file path and no file contents, does the file reach its context?
-// Usage: bun spike/fake-ide.ts [workspace-dir]
+// Usage: bun spike/fake-ide.ts [workspace-dir...]
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import { homedir } from "node:os";
@@ -15,9 +15,12 @@ const IDE_DIR = path.join(
 );
 
 const authToken = randomBytes(16).toString("hex");
-const workspace = process.argv[2]
-  ? path.resolve(process.argv[2])
-  : process.cwd();
+// Several dirs may be passed so the workspace-policy spike can test whether
+// Claude matches any entry in workspaceFolders or only the first.
+const workspaces =
+  process.argv.length > 2
+    ? process.argv.slice(2).map((d) => path.resolve(d))
+    : [process.cwd()];
 
 type Selection = {
   start: { line: number; character: number };
@@ -203,14 +206,12 @@ function callTool(name: string | undefined, args?: Record<string, unknown>) {
     case "getWorkspaceFolders":
       return asText({
         success: true,
-        folders: [
-          {
-            name: path.basename(workspace),
-            uri: `file://${workspace}`,
-            path: workspace,
-          },
-        ],
-        rootPath: workspace,
+        folders: workspaces.map((w) => ({
+          name: path.basename(w),
+          uri: `file://${w}`,
+          path: w,
+        })),
+        rootPath: workspaces[0],
       });
     case "getDiagnostics":
       return asText([]); // yazi has no LSP, so this is always empty
@@ -352,7 +353,7 @@ fs.writeFileSync(
   lockPath,
   JSON.stringify({
     pid: process.pid,
-    workspaceFolders: [workspace],
+    workspaceFolders: workspaces,
     ideName: "yazi",
     transport: "ws",
     authToken,
@@ -366,7 +367,7 @@ logStream = fs.createWriteStream(
 
 console.error(`listening 127.0.0.1:${server.port}`);
 console.error(`lock      ${lockPath}`);
-console.error(`workspace ${workspace}`);
+console.error(`workspace ${workspaces.join(", ")}`);
 console.error(`state     ${STATE_FILE}`);
 console.error(
   `tools     ${ADVERTISED.length} advertised / ${TOOLS.length} implemented`,

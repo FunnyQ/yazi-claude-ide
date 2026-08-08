@@ -5,3 +5,6 @@
 # Machine-local spike state: target.rb is a generated test file, state.json holds absolute paths
 spike/target.rb
 spike/state.json
+
+# Workspace-policy spike marker, generated per run
+spike/ws-probe-*.txt
