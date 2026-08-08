@@ -61,7 +61,7 @@ async fn main() -> std::io::Result<()> {
         &LockFile {
             pid: std::process::id(),
             workspace_folders: folders_of(&state),
-            ide_name: "yazi".to_owned(),
+            ide_name: lock::ide_name(),
             transport: "ws".to_owned(),
             auth_token: sidecar.auth_token().to_owned(),
         },

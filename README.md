@@ -51,6 +51,25 @@ Start yazi, then run `claude` in another pane — it finds the sidecar on its ow
 Verified against Claude Code 2.1.226; the `/ide` protocol has no published
 specification, so a newer CLI can change what it expects without notice.
 
+**Running two yazi instances in one repository?** The CLI auto-connects only
+when one lock file matches, so `/ide` asks instead — and both rows read `yazi`
+followed by the same repository path, because that path is the anchor and the
+anchor is the same. Name the panes with `YCI_IDE_LABEL`:
+
+```sh
+export YCI_IDE_LABEL=api      # in one pane's yazi
+export YCI_IDE_LABEL=web      # in the other's
+```
+
+The rows become `yazi (api)` and `yazi (web)`. Any string works; the sidecar
+reads this one variable and nothing else, so if your terminal or multiplexer
+already exports a per-pane identifier you can hand it that instead — 
+`YCI_IDE_LABEL="$TMUX_PANE"` — and read the same variable in the pane you are
+typing in to know which row is yours. Unset or blank, the name stays `yazi`.
+
+The picker also ticks the connection the session already holds, which answers
+the same question whenever the rows are distinguishable at all.
+
 Two channels, and they do different things:
 
 - **Moving the cursor** tells Claude *which file you are looking at* — the path

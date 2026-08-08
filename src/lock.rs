@@ -39,6 +39,22 @@ pub fn lock_dir_from(get: impl Fn(&str) -> Option<String>) -> PathBuf {
     config.join("ide")
 }
 
+pub fn ide_name() -> String {
+    ide_name_from(|key| std::env::var(key).ok())
+}
+
+/**
+ * The picker's row label (A3). Two sidecars anchored on the same repository are
+ * otherwise indistinguishable there — both rows carry `ideName` and the same
+ * anchor — so the label is the only place a user can tell them apart.
+ */
+pub fn ide_name_from(get: impl Fn(&str) -> Option<String>) -> String {
+    match get("YCI_IDE_LABEL").as_deref().map(str::trim) {
+        Some(label) if !label.is_empty() => format!("yazi ({label})"),
+        _ => "yazi".to_owned(),
+    }
+}
+
 fn normalise(path: &Path) -> PathBuf {
     let absolute = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
     absolute.components().collect()
@@ -277,6 +293,28 @@ mod tests {
         assert_eq!(json["ideName"], "yazi");
         assert_eq!(json["transport"], "ws");
         assert_eq!(read_lock(temp.path(), 4000), Some(expected));
+    }
+
+    #[test]
+    fn a3_ide_name_is_yazi_unless_a_label_is_set() {
+        let named = |value: Option<&str>| {
+            ide_name_from(|key| match (key, value) {
+                ("YCI_IDE_LABEL", Some(label)) => Some(label.to_owned()),
+                _ => None,
+            })
+        };
+
+        assert_eq!(named(None), "yazi");
+        assert_eq!(named(Some("")), "yazi");
+        assert_eq!(named(Some("   ")), "yazi");
+        assert_eq!(named(Some("w41:t6")), "yazi (w41:t6)");
+        assert_eq!(named(Some("  w41:t6  ")), "yazi (w41:t6)");
+        // The label comes from YCI_IDE_LABEL alone — the sidecar knows no terminal
+        // and no multiplexer, so a per-pane variable only counts once a user forwards it.
+        assert_eq!(
+            ide_name_from(|key| (key == "TERM_PROGRAM").then(|| "ghostty".to_owned())),
+            "yazi"
+        );
     }
 
     #[test]
