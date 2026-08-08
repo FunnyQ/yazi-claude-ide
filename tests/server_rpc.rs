@@ -46,6 +46,58 @@ async fn e1_correct_token_connects() {
         .close();
 }
 
+/// Claude Code asks for the `mcp` subprotocol and hangs up on a `101` that does
+/// not name it back, so this asserts on the handshake response rather than on
+/// whether the socket opened — tungstenite opens it either way.
+#[tokio::test]
+async fn e6_requested_subprotocol_is_echoed_in_the_handshake() {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    let server = sidecar().await;
+    let mut request = format!("ws://127.0.0.1:{}", server.port())
+        .into_client_request()
+        .expect("url should parse");
+    request
+        .headers_mut()
+        .insert("x-claude-code-ide-authorization", TOKEN.parse().unwrap());
+    request
+        .headers_mut()
+        .insert("sec-websocket-protocol", "mcp".parse().unwrap());
+
+    let (_socket, response) = tokio_tungstenite::connect_async(request)
+        .await
+        .expect("correct token should connect");
+
+    assert_eq!(
+        response
+            .headers()
+            .get("sec-websocket-protocol")
+            .map(|value| value.as_bytes()),
+        Some("mcp".as_bytes()),
+    );
+}
+
+/// The header is optional. A client that asks for no subprotocol MUST NOT be
+/// told it got one.
+#[tokio::test]
+async fn e6_no_subprotocol_is_offered_when_none_was_requested() {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+    let server = sidecar().await;
+    let mut request = format!("ws://127.0.0.1:{}", server.port())
+        .into_client_request()
+        .expect("url should parse");
+    request
+        .headers_mut()
+        .insert("x-claude-code-ide-authorization", TOKEN.parse().unwrap());
+
+    let (_socket, response) = tokio_tungstenite::connect_async(request)
+        .await
+        .expect("correct token should connect");
+
+    assert!(response.headers().get("sec-websocket-protocol").is_none());
+}
+
 #[tokio::test]
 async fn e2_unknown_method_returns_minus_32601() {
     let server = sidecar().await;

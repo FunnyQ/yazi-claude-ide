@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 use tokio_tungstenite::accept_hdr_async;
-use tokio_tungstenite::tungstenite::handshake::server::ErrorResponse;
+use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Response};
 use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::tungstenite::{Message, Utf8Bytes};
 
@@ -260,18 +260,25 @@ pub async fn start_sidecar(opts: StartOptions) -> io::Result<Sidecar> {
                             let connection_inner = Arc::clone(&listener_inner);
                             tokio::spawn(async move {
                                 let expected_token = connection_inner.auth_token.clone();
-                                let socket = accept_hdr_async(stream, move |request: &tokio_tungstenite::tungstenite::http::Request<()>, response| {
+                                let socket = accept_hdr_async(stream, move |request: &tokio_tungstenite::tungstenite::http::Request<()>, mut response: Response| {
                                     let authorized = request
                                         .headers()
                                         .get("x-claude-code-ide-authorization")
                                         .is_some_and(|value| value.as_bytes() == expected_token.as_bytes());
-                                    if authorized {
-                                        Ok(response)
-                                    } else {
+                                    if !authorized {
                                         let mut rejection = ErrorResponse::new(Some("Unauthorized".to_owned()));
                                         *rejection.status_mut() = StatusCode::UNAUTHORIZED;
-                                        Err(rejection)
+                                        return Err(rejection);
                                     }
+                                    // E6. Claude Code asks for `mcp` and hangs up on a 101 that does
+                                    // not name it back, which the CLI reports only as a failure to
+                                    // connect. tungstenite does not echo it for us.
+                                    if let Some(protocol) = request.headers().get("sec-websocket-protocol") {
+                                        response
+                                            .headers_mut()
+                                            .insert("sec-websocket-protocol", protocol.clone());
+                                    }
+                                    Ok(response)
                                 })
                                 .await;
 
