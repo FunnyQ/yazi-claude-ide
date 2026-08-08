@@ -11,10 +11,18 @@ export type DdsEvent = {
 export type StreamHandlers = {
   onHover: (url: string) => void;
   onCd: (url: string) => void;
+  onMarked: (urls: string[]) => void;
 };
 
-/** hover carries the focused file, cd the new directory. Nothing else is needed. */
-export const KINDS = "hover,cd";
+/** The kind the plugin publishes the marked set under (H2, H3). */
+export const MARKED_KIND = "claude-marked";
+
+/**
+ * hover carries the focused file, cd the new directory. `claude-marked` is ours:
+ * yazi announces nothing when the marked set changes, so the plugin publishes it
+ * on a keybinding instead (H1).
+ */
+export const KINDS = `hover,cd,${MARKED_KIND}`;
 
 /**
  * `ya sub` prints `kind,receiver,sender,json`. Only the first three commas
@@ -52,6 +60,18 @@ export function dispatch(
   // `ya sub` is global: every yazi on the machine lands in this stream, and only
   // the sender field tells them apart (G2).
   if (!event || event.sender !== yaziId) return;
+
+  // The marked set arrives as a list under its own key, so it is read before the
+  // single-url check below — which would reject every one of these events (H3).
+  if (event.kind === MARKED_KIND) {
+    const urls = event.body.urls;
+    if (!Array.isArray(urls)) return;
+    // An empty set is meaningful: H7 makes it the fall-back-to-hovered case.
+    handlers.onMarked(
+      urls.filter((url): url is string => typeof url === "string"),
+    );
+    return;
+  }
 
   // Measured: hover repeats an unchanged url, and the first events after startup
   // carry an empty one. Both have to be tolerated here rather than downstream.

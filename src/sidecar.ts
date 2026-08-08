@@ -50,6 +50,13 @@ writeLock(dir, sidecar.port, {
 
 const stream = subscribe(yaziId, {
   onHover: (url) => sidecar.setFocus(url),
+  onMarked: (urls) => {
+    // The only place the gesture is observable without a Claude attached: with
+    // no connection open it sends nothing (H8), so the log is what the manual
+    // harness asserts against.
+    console.error(`yazi-claude-ide: marked ${urls.length} file(s)`);
+    sidecar.mention(urls);
+  },
   onCd: (url) => {
     // The directory yazi opened is the first one it announces — that is the
     // startup directory the anchor is defined against (B1). After that the

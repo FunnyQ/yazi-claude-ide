@@ -10,6 +10,7 @@ export type Sidecar = {
   authToken: string;
   setFocus(filePath: string | null): void;
   focusedFile(): string | null;
+  mention(filePaths: string[]): void;
   stop(): void;
 };
 
@@ -190,6 +191,30 @@ export function startSidecar(opts: {
       push();
     },
     focusedFile: () => focused,
+    /**
+     * H4-H9. One notification per marked file, in yazi's order, to every open
+     * connection. No dedupe and no queue: this is a keypress, so a repeat means
+     * the user asked again, and a press with nobody listening is simply lost.
+     */
+    mention(filePaths) {
+      // H7. Nothing marked means the gesture is about the file under the cursor,
+      // which is how yazi's own commands read an empty selection.
+      const paths = filePaths.length ? filePaths : focused ? [focused] : [];
+      for (const filePath of paths) {
+        // H6, same test as C5: a directory or a vanished path is not a file to
+        // mention, and skipping it is quieter than mentioning something Claude
+        // cannot read.
+        if (!selectionPayload(filePath).success) continue;
+        for (const ws of sockets)
+          send(ws, {
+            jsonrpc: "2.0",
+            method: "at_mentioned",
+            // No lineStart/lineEnd. Measured: sending 0 for both renders
+            // `@file#L1`, a line anchor a marked file never meant (H4).
+            params: { filePath },
+          });
+      }
+    },
     stop() {
       server.stop(true);
     },
