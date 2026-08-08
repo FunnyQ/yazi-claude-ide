@@ -1,7 +1,0 @@
-# The H1 gesture. yazi announces nothing when the marked set changes, so sending
-# it has to be a keypress. `cc`/`cd`/`cf`/`cn` are yazi's own copy chords; `cv`
-# is free.
-[[mgr.prepend_keymap]]
-on = ["c", "v"]
-run = "plugin claude-ide"
-desc = "Send the marked files to Claude"
