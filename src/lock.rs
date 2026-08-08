@@ -244,8 +244,12 @@ mod tests {
             lock_dir_from(|key| (key == "CLAUDE_CONFIG_DIR").then(String::new)),
             PathBuf::from("ide")
         );
-        assert!(lock_dir().is_absolute());
-        assert!(lock_dir().ends_with("ide"));
+        // Nothing here calls `lock_dir()`. It reads the real environment, so an
+        // assertion on it tests the developer's machine — and the case above
+        // shows a relative `CLAUDE_CONFIG_DIR` is legal, which an `is_absolute`
+        // check would then wrongly fail. `tests/lifecycle.rs` proves the wiring
+        // hermetically: it sets `CLAUDE_CONFIG_DIR` to a temp dir and finds the
+        // binary's lock file under it.
     }
 
     #[test]
