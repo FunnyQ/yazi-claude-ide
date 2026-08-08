@@ -5,6 +5,19 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-08-09
+
+_tracks tag `v0.3.0`_
+
+### Added
+- `YCI_IDE_LABEL` lets you tell apart multiple yazi instances open on the same repository. Set it and `/ide`'s picker shows `yazi (api)`, `yazi (web)`, and so on instead of two identical, unlabelled rows. Unset or blank, nothing changes. This does not make Claude Code auto-connect when several instances match a session's directory — the lock file still has no way to say "serve only this pane" — but it does make the manual picker usable.
+- `dev/docs/` is now part of the repository: the A–H contract every test is named after, plus the protocol and yazi-capability measurements behind it. A fresh clone now ships its own specification.
+
+### Fixed
+- `install.sh` now warns if another `yazi-claude-ide` earlier on `PATH` would shadow the copy it just installed, instead of silently reporting success while yazi keeps running the stale binary.
+- `.gitignore`'s `docs/` rule matched at any depth and was silently excluding `dev/docs/`; it's now anchored to the repository root.
+- The README's build-from-source command now installs to `--root ~/.local`, so it no longer diverges from the other supported install path.
+
 ## [0.2.1] - 2026-08-09
 
 _tracks tag `v0.2.1`_
