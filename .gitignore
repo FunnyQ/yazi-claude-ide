@@ -3,12 +3,6 @@
 .cockpit/
 node_modules/
 
-# Machine-local spike state: target.rb is a generated test file, state.json holds absolute paths
-spike/target.rb
-spike/state.json
-
-# Workspace-policy spike marker, generated per run
-spike/ws-probe-*.txt
-
-# Harness-local CLAUDE_CONFIG_DIR: lock files written during manual verification
-test/manual/run/
+# Local development material: the plan, the measurement docs, the spikes, and
+# the manual harness. Present in a working copy, never published.
+dev/
