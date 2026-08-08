@@ -64,8 +64,27 @@ mistake cost most of the session.
 `sender` field or a stray real session will pollute the capture. `fixtures/`
 was scrubbed for exactly this reason.
 
+## DDS server succession
+
+`dds-succession.sh` answers PLAN.md gap #7 — what the surviving peers do when
+the instance acting as DDS server exits.
+
+It looked untestable because every yazi on the machine shares one DDS, so
+killing the server meant killing a real session. It does not: the socket is
+`<temp_dir>/yazi+<uid>/.dds.sock`, and yazi and `ya` both read `TMPDIR`, so a
+private TMPDIR elects its own server.
+
+```sh
+./dds-succession.sh isolation      # the private DDS is invisible both ways
+./dds-succession.sh kill           # SIGKILL the server, watch the survivors
+./dds-succession.sh scale 8        # same with eight peers
+NEGATIVE=1 ./dds-succession.sh stream   # see the ya sub check go red
+./dds-succession.sh stop
+```
+
+Keep the isolated path short — `sun_path` is 104 bytes, and overrunning it makes
+yazi start with DDS silently disabled.
+
 ## Not tested
 
-- What happens to remaining peers when the instance acting as DDS server exits.
-  Testing it meant killing unrelated live yazi sessions.
 - Plugin hot-reload. yazi has no reload action; every probe run restarts yazi.

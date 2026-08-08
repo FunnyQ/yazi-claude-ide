@@ -101,8 +101,10 @@ export const POLL_MS = 2_000;
 
 /**
  * A probe failure means DDS could not route to the id, which is not quite the
- * same as yazi being gone — server succession is untested and could plausibly
- * make a live instance briefly unroutable. Three in a row is the evidence.
+ * same as yazi being gone. Measured: when the instance acting as DDS server
+ * exits, every surviving peer is unroutable for ~1.6s. One failure would act on
+ * that window ~80% of the time and two need it to reach only 2s, so three in a
+ * row is the evidence — a 4s outage, 2.5x the worst measured.
  */
 export const FAILURES_BEFORE_GONE = 3;
 

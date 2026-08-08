@@ -135,9 +135,11 @@ The yazi half of this list is automated by `test/manual/harness.sh verify`, whic
 
 6. ~~**The sidecar outlives yazi and nothing cleans it up.**~~ **Closed.** DDS still emits no departure event — re-measured on 26.5.6, no `bye` reaches a subscriber even though the binary carries the kind. The sidecar therefore polls `ya emit-to <id> noop`, which exits 0 for a live receiver and 1 for an unknown one, and exits after three consecutive failures. See the liveness-probe measurements in [docs/yazi-capability.md](docs/yazi-capability.md).
 
-7. **DDS server succession is untested.** The first yazi instance on the machine becomes the DDS server and later ones are clients. What happens to the surviving peers when the server instance exits was not measured, because testing it meant killing unrelated live yazi sessions. The `g4` verification covers two peers, not the server leaving.
+7. ~~**DDS server succession is untested.**~~ **Closed 2026-08-08.** Testing it no longer means killing a real yazi: the DDS socket is `<temp_dir>/yazi+<uid>/.dds.sock` and both yazi and `ya` read `TMPDIR`, so a private TMPDIR elects its own server, invisible in both directions. Reproduce with `spike/yazi/dds-succession.sh`; measurements in [docs/yazi-capability.md](docs/yazi-capability.md).
 
-   This is now the reason the liveness poll requires three consecutive failures rather than one: a probe failure means DDS could not route to that id, and succession is the one plausible way a live yazi becomes briefly unroutable. If succession is ever measured to be instant, the threshold can drop to one and the sidecar exits in 2s instead of 6s.
+   **Succession is not instant, and `FAILURES_BEFORE_GONE` stays 3.** When the server instance exits — by `quit` or by `SIGKILL`, they behave identically — every surviving peer is unroutable for ~1.5-1.6s, independent of how many peers there are. At a 2s poll, one failure would act on that window ~80% of the time and two would need it to reach only 2s against a measured 1.60s. Three requires a 4s outage, 2.5x the worst measured. The hoped-for 2s exit is not available.
+
+   Two findings came with it. The sidecar's `ya sub` stream **survives** succession and keeps delivering events, so only `emit-to` feels the outage. And once in four eight-peer trials a live yazi **never rejoined** — running, but off DDS permanently; a sidecar on that instance exits, which is correct, because an instance off DDS cannot deliver `hover` or `cd` either.
 
 ## Definition of done (MVP)
 
