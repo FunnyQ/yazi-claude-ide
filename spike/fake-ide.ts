@@ -225,10 +225,12 @@ function callTool(name: string | undefined, args?: Record<string, unknown>) {
       return {
         content: [{ type: "text", text: `Opened file: ${args?.filePath}` }],
       };
-    case "openDiff":
-      // Blocking operation that needs user interaction. yazi has no diff UI yet,
-      // so always reject.
-      return { content: [{ type: "text", text: "DIFF_REJECTED" }] };
+    // No `openDiff` case. This spike returned `DIFF_REJECTED` on the reasoning
+    // that yazi has no diff UI, so rejecting was the honest answer. Measured
+    // 2026-08-08 against the real implementation: the CLI reads that as the user
+    // refusing the change and cancels the edit outright, so anyone running this
+    // spike would find their edits silently failing. Falling through to `-32601`
+    // matches contract F5 — see docs/baseline.md.
     case "checkDocumentDirty":
     case "saveDocument":
       return asText({
