@@ -250,8 +250,16 @@ Measured against Claude Code **2.1.226** — a later build than the 2.1.223 the 
   | --- | --- |
   | `{filePath}` | `@PLAN.md` — the whole file |
   | `{filePath, lineStart: 0, lineEnd: 0}` | `@PLAN.md#L1` — a line anchor |
+  | `{filePath, lineStart: 28, lineEnd: 29}` | `@CHANGELOG.md#L29-30` — a range |
 
   `0` is read as line one, not as "no range". A marked file in a file manager has no range, so **the fields must be omitted, not zeroed**.
+
+  The third row was measured on 2026-08-09 against 2.1.226, through the whole
+  section I path: a Neovim opened by yazi's block opener published lines 29-30,
+  and the sidecar's 1-based-to-0-based conversion (I4) put `28, 29` on the wire.
+  So the pair is 0-based and **inclusive** — `28, 29` is two lines, not three —
+  and the render is `#L<first>-<last>` counting from 1. Until this measurement
+  the range row was an inference from the `0, 0` row above it.
 
 Untested and worth knowing before relying on this: whether `at_mentioned` is accepted while the prompt already holds text the user is typing, and whether the mention survives if the user never submits it.
 
