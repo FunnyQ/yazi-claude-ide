@@ -5,6 +5,21 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-08-09
+
+_tracks tag `v0.5.0`_
+
+### Added
+- A third channel to Claude: an editor started by yazi's block opener (Enter on a file) can now publish your live selection back to the sidecar as you drag, and Claude shows it as an "N lines selected" indicator with the selected lines already in its context — no submission, no `@` mention. This is the only way a line range reaches Claude from this project, since a file manager has no line numbers of its own.
+- The repository is now also an installable Neovim plugin (`{ "FunnyQ/yazi-claude-ide" }` in lazy.nvim, or `plugin/yazi-claude-ide.lua` copied by hand). It needs no setup call and no keybinding — selecting is the gesture, and it does nothing outside an editor that yazi opened. Any other editor can take its place by publishing `claude-editor-selection` over yazi's DDS; the README documents the wire format.
+
+### Changed
+- Claude counts its line display from the selected text, not from the range, so an editor that sends the range alone gets the plain file indicator: no line count, and nothing in Claude's context. Sending the text is what buys both. The sidecar still never opens a file itself — the content comes only from the editor's own buffer, and never covers more than what was selected by hand. The Neovim plugin drops the text above 100 KB and sends the range alone.
+
+### Fixed
+- The manual test harness had been broken since a directory rename left its plugin symlink dangling; it now points at the tracked `claude-ide.yazi/` directory again.
+- The harness's teardown killed `ya sub` by matching its command line, which could silently stop *every* other yazi instance on the machine from pushing to Claude. It now targets only the process it started.
+
 ## [0.3.0] - 2026-08-09
 
 _tracks tag `v0.3.0`_
