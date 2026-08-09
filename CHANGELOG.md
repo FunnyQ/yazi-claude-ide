@@ -5,6 +5,17 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-08-09
+
+_tracks tag `v0.5.1`_
+
+### Fixed
+- A selection was undercounted by one line. Selecting lines 5 through 10 showed "5 lines selected" instead of 6, because the range Claude receives ends *before* the position it's given, and the editor stopped exactly at the start of the last line instead of past its end.
+- Selecting a run of words or characters (`v` in Neovim) did nothing at all — only whole-line selections (`V`) registered. A charwise selection collapsed to zero width, so Claude had nothing to show.
+- Dismissing a selection with Esc left the old indicator on screen, still reporting "1 line selected" after the selection was gone. It now clears back to the plain file indicator.
+
+All three traced to the same root cause: the editor was only ever sending line numbers, never character positions. The DDS selection body gains two optional fields, `charStart` and `charEnd`, and the bundled Neovim plugin now computes them per visual mode; the README documents the wire format. An editor integration written against v0.5.0 keeps working without them, but it will still undercount by one line and can't represent a selection inside a single line. If you're on v0.5.0, update both the sidecar binary and the Neovim plugin — the fix spans both.
+
 ## [0.5.0] - 2026-08-09
 
 _tracks tag `v0.5.0`_
