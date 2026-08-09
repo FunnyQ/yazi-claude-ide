@@ -68,6 +68,45 @@ Two channels, and they do different things:
 
 The plugin never reads a file itself. Claude does, when you submit.
 
+## Line ranges from your editor
+
+A file manager has no line numbers, so neither channel above can send one. The
+editor yazi opens on `Enter` does, and it can hand the range back through the
+same sidecar — one `/ide` connection still covers both halves.
+
+Bind this in Neovim. It only binds inside a yazi-opened editor, and it sends
+line numbers, never the selected text:
+
+```lua
+-- ~/.config/nvim/lua/plugins/yazi-claude-ide.lua (or anywhere in your config)
+if vim.env.YAZI_ID then
+  vim.keymap.set("v", "<leader>ay", function()
+    local first, last = vim.fn.line("v"), vim.fn.line(".")
+    if first > last then
+      first, last = last, first
+    end
+    vim.system({
+      "ya", "pub-to", "0", "claude-selection", "--json",
+      vim.json.encode({
+        yaziId = vim.env.YAZI_ID,
+        url = vim.fn.expand("%:p"),
+        lineStart = first,
+        lineEnd = last,
+      }),
+    })
+  end, { desc = "Send the selected lines to Claude" })
+end
+```
+
+Select lines, press `<leader>ay`, and the range arrives as a line-anchored `@`
+mention — `@file#L10-20` for lines 10 to 20.
+
+Any editor works the same way — publish that JSON with `ya pub-to 0
+claude-selection` and count lines from 1. `yaziId` is what routes it: the
+publish is a broadcast that reaches every sidecar on the machine, and each one
+keeps only the ranges carrying its own `$YAZI_ID`, which your editor inherited
+from the yazi that opened it.
+
 ## Two yazi instances in one repository
 
 **Claude Code cannot pick between them, and this plugin cannot make it.** The

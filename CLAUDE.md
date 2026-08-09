@@ -21,17 +21,17 @@ CI (`.github/workflows/ci.yml`) is three jobs: `check` runs `fmt`/`clippy`/`test
 
 ## The contract is the spec
 
-`dev/docs/contract.md` defines clauses **A–H** and is the acceptance oracle for everything in `src/`. Read it before changing behaviour. Every automated test is named after the clause it covers (`a5_server_binds_loopback_only`, `e1_wrong_token_is_refused_with_401`, `d8_…`), so clause coverage is a grep.
+`dev/docs/contract.md` defines clauses **A–I** and is the acceptance oracle for everything in `src/`. Read it before changing behaviour. Every automated test is named after the clause it covers (`a5_server_binds_loopback_only`, `e1_wrong_token_is_refused_with_401`, `d8_…`), so clause coverage is a grep.
 
 Adding or changing behaviour means changing the contract first, then the test named for that clause.
 
 **`dev/` is tracked, except `dev/PLAN.md`.** The contract, the measurements, the spikes, and the manual harness all ship in a fresh clone. `dev/PLAN.md` stays local because it is superseded and wrong — it still describes the push channel as `tokio::sync::broadcast`.
 
-- `dev/docs/contract.md` — the A–H specification
+- `dev/docs/contract.md` — the A–I specification
 - `dev/docs/baseline.md` — measurements behind F5, H4, the protocol version
 - `dev/docs/yazi-capability.md` — the double-fork and `ya.sync` measurements behind G3, H2
 
-Three clauses have no automated test, on purpose: **B7** is marked `[manual]` and only `harness.sh verify` reaches it; **H1** and **H2** govern the Lua plugin, which no Rust test can reach.
+Four clauses have no automated test, on purpose: **B7** is marked `[manual]` and only `harness.sh verify` reaches it; **H1** and **H2** govern the Lua plugin, which no Rust test can reach; and **I8** is a standing assumption about yazi, not about `src/` — `harness.sh verify` re-checks it against a real block opener.
 
 ## Architecture
 
@@ -44,7 +44,7 @@ yazi ──ya.sync──► ps.pub_to(0, "claude-marked")        main.lua
        ▼
      yazi-claude-ide
        main.rs    YAZI_ID guard · wiring · SIGINT/SIGTERM · shutdown
-       yazi.rs    `ya sub hover,cd,claude-marked` · `ya emit-to reveal` · liveness poll
+       yazi.rs    `ya sub hover,cd,claude-marked,claude-selection` · `ya emit-to reveal` · liveness poll
        lock.rs    <config>/ide/<port>.lock · anchor_for · workspace_folders · reclaim_stale
        server.rs  TcpListener 127.0.0.1:0 · accept_hdr_async · per-connection mpsc
          tools.rs   ADVERTISED · selection_payload · call_tool
@@ -58,15 +58,17 @@ yazi ──ya.sync──► ps.pub_to(0, "claude-marked")        main.lua
 | --- | --- | --- |
 | `src/lock.rs` | A, B | `mod tests` in file |
 | `src/tools.rs` | B6, C, E2, F | `mod tests` in file |
-| `src/yazi.rs` | G2, G3, H3 | `mod tests` in file |
-| `src/server.rs` | A5, D, E | `tests/server_rpc.rs`, `tests/server_push.rs` |
+| `src/yazi.rs` | G2, G3, H3, I2, I3, I6 | `mod tests` in file |
+| `src/server.rs` | A5, D, E, I5, I7 | `tests/server_rpc.rs`, `tests/server_push.rs` |
 | `src/main.rs` | A6, B1, B3, G1–G3 | `tests/lifecycle.rs` |
 
 `tests/common/mod.rs` holds the async WebSocket client both server test files use. `tests/lifecycle.rs` drives the **compiled binary** via `env!("CARGO_BIN_EXE_yazi-claude-ide")` — it is the only check that proves the four modules compose, since the module tests call `start_sidecar` directly and cannot catch broken wiring.
 
-### Two channels to Claude
+### Three channels to Claude
 
-Moving yazi's cursor pushes `selection_changed` — **the path alone, never contents**. Pressing the plugin's key publishes the marked set, which the sidecar fans out as one `at_mentioned` notification per path. The sidecar never reads a file; Claude does, when the user submits.
+Moving yazi's cursor pushes `selection_changed` — **the path alone, never contents**. Pressing the plugin's key publishes the marked set, which the sidecar fans out as one `at_mentioned` notification per path. The editor yazi's block opener runs publishes `claude-selection`, which becomes one `at_mentioned` carrying a line range — the only range this sidecar can send, since a file manager has none (section I). The sidecar never reads a file; Claude does, when the user submits.
+
+The third channel does not come from yazi and does not obey G2. An external `ya pub-to` is its own DDS peer, so `sender` names that `ya`, never the yazi the editor belongs to; and `ya pub-to <yazi id>` is refused outright, because a yazi accepts only kinds its own plugins subscribed to. Broadcast is the only route left, which puts the line in front of **every sidecar on the machine** — `yaziId` in the body is the whole of the addressing, and `dispatch` therefore branches on `claude-selection` *before* the sender check. Both facts are measured; see clause I3.
 
 ## Invariants that are easy to break
 
@@ -80,7 +82,7 @@ Moving yazi's cursor pushes `selection_changed` — **the path alone, never cont
 
 **`YCI_POLL_MS` and `YCI_FAILURES_BEFORE_GONE` exist only for the lifecycle tests**, to make liveness detection finish in about a second instead of production's measured six. Keep them in the `main.rs` wiring. Any new environment variable `src/` reads must also be added to the hostile-environment step in `ci.yml`, or that step stops covering it.
 
-**Two `lock.rs` tests use this repository's own directory layout as a fixture.** Both build paths from `env!("CARGO_MANIFEST_DIR")` and point at `claude-ide.yazi/`. Renaming or moving a tracked top-level directory breaks `b1_the_anchor_is_the_git_root_or_the_directory_itself`: `anchor_for` shells out to `git -C <dir> rev-parse --show-toplevel`, and on a path that no longer exists git exits non-zero, so the function falls through to returning that path itself instead of the repo root. `b1_the_pair_is_anchor_then_cursor` keeps passing on the same stale path, because `workspace_folders` only builds strings and never touches disk.
+**Two `lock.rs` tests use this repository's own directory layout as a fixture.** Both build paths from `env!("CARGO_MANIFEST_DIR")` and point at `claude-ide.yazi/`. Renaming or moving a tracked top-level directory breaks `b1_the_anchor_is_the_git_root_or_the_directory_itself`: `anchor_for` shells out to `git -C <dir> rev-parse --show-toplevel`, and on a path that no longer exists git exits non-zero, so the function falls through to returning that path itself instead of the repo root. `b1_the_pair_is_anchor_then_cursor` keeps passing on the same stale path, because `workspace_folders` only builds strings and never touches disk. The same rename already cost the harness once: `dev/manual/config/plugins/claude-ide.yazi` is a tracked symlink into the plugin directory, it was left pointing at a `plugin/` that no longer exists, and the only symptom was `harness.sh start` reporting `started` while no sidecar ran. `cargo test` cannot see any of this.
 
 **A green suite does not mean a real Claude Code can connect.** `tests/common/mod.rs` builds its upgrade request from the same assumptions as `server.rs`, so any requirement both sides are blind to survives every test. That is how E6 hid from the first version onwards: Claude Code sends `Sec-WebSocket-Protocol: mcp` and hangs up on a `101` that does not echo it, while 115 tests stayed green. `dev/spike/fake-ide.ts` was blind to it too — it runs on `Bun.serve`, whose `server.upgrade()` echoes the subprotocol for you, so every measurement in `baseline.md` was taken through that blind spot. To check a claim about the real client, put a logging TCP proxy in front of the sidecar and point `~/.claude/ide/<port>.lock` at the proxy; `fake-ide.ts` is the control that tells you whether a failure is ours or upstream.
 

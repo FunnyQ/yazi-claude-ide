@@ -14,6 +14,7 @@ Clauses marked **[manual]** cannot be automated: `claude --ide` only takes effec
 | **anchor** | The git root of yazi's startup directory, or that directory itself when it is not in a repository. Fixed for the sidecar's lifetime. |
 | **cursor folder** | yazi's current directory. Changes on every `cd`. |
 | **adopted** | The CLI printed `Connected to yazi.` — distinct from a completed WebSocket handshake. |
+| **editor** | The program yazi's block opener runs on `Enter`. A separate process that inherits `$YAZI_ID`. Reaches Claude only through section I. |
 
 ## A. Discovery and the lock file
 
@@ -97,17 +98,32 @@ Section D carries one file and replaces it on every move. This section carries a
 - **H1.** Sending marked files MUST be an explicit user gesture, bound to a key. yazi emits no DDS event when the marked set changes — its Ember kinds are `hi hey bye cd tab bulk load move yank hover mount trash moveItem delete rename download duplicate duplicateItem`, with nothing for marking — so a sidecar cannot mirror the set and MUST NOT try.
 - **H2.** The plugin's `entry()` MUST read `cx.active.selected` and publish the paths with `ps.pub_to(0, "claude-marked", …)`, and **both MUST happen inside one `ya.sync` hop**. `entry()` runs in the async VM, where `ps` is `nil` and reaching for it fails the whole plugin call — silently, with no notification and nothing on the wire. Publishing from `entry()` itself therefore satisfies a looser reading of this clause and ships a plugin that does nothing. See [yazi-capability.md](yazi-capability.md) for the failure and the only place it is visible.
 - **H3.** The sidecar MUST subscribe to `claude-marked` alongside `hover` and `cd`, and MUST filter it on `sender` like every other kind (G2).
-- **H4.** For each path in the set the sidecar MUST send `at_mentioned` as a JSON-RPC notification — `method` and `params`, no `id` — with `params` exactly `{filePath}`. `lineStart` and `lineEnd` MUST be omitted. Measured 2026-08-08 against 2.1.226: omitting them renders `@PLAN.md`, while sending `0` for both renders `@PLAN.md#L1`, a line anchor a marked file never meant. See [baseline.md](baseline.md).
+- **H4.** For each path in the set the sidecar MUST send `at_mentioned` as a JSON-RPC notification — `method` and `params`, no `id` — with `params` exactly `{filePath}`. `lineStart` and `lineEnd` MUST be omitted. Measured 2026-08-08 against 2.1.226: omitting them renders `@PLAN.md`, while sending `0` for both renders `@PLAN.md#L1`, a line anchor a marked file never meant. The omission is scoped to the marked set — I5 is the case where a range exists and is sent. See [baseline.md](baseline.md).
 - **H5.** `filePath` MUST be absolute and unresolved (B5), and the notifications MUST go out in the order yazi lists the set.
 - **H6.** A directory MUST be mentioned like any other path. Measured 2026-08-08: the CLI reads a mentioned file and lists a mentioned directory, choosing by what the path is. Only a path that does not stat MUST be skipped — this is deliberately **not** C5's test, which exists to keep directories out of `selection_changed`, where `filePath` claims an open editor. A mention makes no such claim.
 - **H7.** With the marked set empty the gesture MUST fall back to the path under the cursor, matching how yazi's own commands treat selected-or-hovered. That path is whatever yazi last hovered, **including a directory** — it is not the focused file of section C, which is file-only by C5 and would make the fallback silent exactly when the user is standing on a folder. The sidecar MUST therefore track the hovered path separately from the focused file. With neither, it MUST send nothing.
 - **H8.** With no connection open the gesture MUST send nothing and MUST NOT queue for replay, as in D7. Unlike D3, no connection is owed a set it missed — the gesture is the user's, not the sidecar's.
 - **H9.** Every open connection MUST receive the set (D8). There is no dedupe: pressing the key twice MUST send twice, deliberately unlike D6, because a repeat is the user asking again.
 
+## I. Editor line ranges and the range mention
+
+Section H carries paths without ranges, because a file manager has no ranges. The editor yazi's block opener runs does have them, and it is a separate process sitting on the far side of that opener. This section is the only path by which a line range reaches Claude.
+
+The route is measurable from outside yazi and every clause below was settled that way on 2026-08-09, against Ya 26.5.6 with a real block opener holding the terminal.
+
+- **I1.** Sending a range MUST be an explicit user gesture in the editor, bound to a key, as in H1. The sidecar MUST NOT ask the editor for its selection, and the editor MUST NOT publish on cursor movement. The editor is not a second `selection_changed` source; section D owns that slot and D6 would fight it.
+- **I2.** The editor MUST publish the kind `claude-selection` with `ya pub-to 0`, and the sidecar MUST subscribe to it alongside `hover`, `cd`, and `claude-marked`. Broadcast is the only route there is: `ya pub-to <yazi id>` and `ya pub` are both refused with ``Cannot send message: Receiver `<id>` does not have the ability to receive `claude-selection` messages``, because a yazi instance accepts only the kinds its own plugins subscribed to, and the plugin of H2 subscribes to none.
+- **I3.** The body MUST be `{yaziId, url, lineStart, lineEnd}` and the sidecar MUST filter it on `yaziId`, **not** on `sender` as G2 requires of every other kind. `ya pub-to` joins DDS as a peer in its own right and stamps `sender` with a fresh id of its own, ignoring the `$YAZI_ID` in its environment. So a sidecar filtering on `sender` drops every range, and — because I2 forces a broadcast that reaches every sidecar on the machine — one filtering on nothing mentions the file into unrelated sessions. The editor learns `yaziId` from the `$YAZI_ID` it inherited from yazi.
+- **I4.** `lineStart` and `lineEnd` in the DDS body MUST be 1-based and inclusive, the way editors count lines. The sidecar MUST convert them to the 0-based pair the CLI renders — `lineStart: 0` renders `#L1` (H4) — so that the off-by-one lives in one tested place instead of in every editor's config.
+- **I5.** The sidecar MUST send `at_mentioned` as a JSON-RPC notification with `params` exactly `{filePath, lineStart, lineEnd}`. This is the one case H4's omission does not cover: an editor selection really does have a range, which is the whole reason this channel exists. **How a real CLI renders a non-zero pair is not yet measured** — H4 measured only `0, 0`, which rendered `#L1`, and `#L10-20` for `9, 19` is an inference from it. `/ide` is interactive-only (B7), so settling this needs a human and it belongs in [baseline.md](baseline.md) once taken.
+- **I6.** `url` MUST be an absolute unresolved path (B5) naming a regular file that stats — C5's test, not H6's, because a range over a directory means nothing. A body missing a field, carrying a non-numeric line, a line below 1, or `lineStart` greater than `lineEnd` MUST be dropped whole and MUST NOT be repaired. E5 applies to every one of them: a malformed publish MUST NOT be able to kill the sidecar.
+- **I7.** With no connection open the gesture MUST send nothing and MUST NOT queue for replay (H8), every open connection MUST receive it (H9, D8), and repeating the gesture MUST send again. There is no dedupe — a repeat is the user asking again.
+- **I8.** yazi MUST keep routing DDS while the block opener holds the terminal, or the channel does not exist. Verified rather than assumed: with a single yazi owning its own `.dds.sock` — the worst case, since every message routes through the blocked process — a publish issued while the opener was up was delivered to an outside subscriber. This clause is a standing assumption about yazi, not a requirement on the sidecar; `dev/manual/harness.sh verify` re-checks it.
+
 ## Non-goals for the MVP
 
 Recorded so that a future reader can tell a deliberate omission from an oversight.
 
-- File contents in `text` (C4). Claude reads files with its own `Read` tool.
+- File contents in `text` (C4), and the selected text in a range mention (I5). Claude reads files with its own `Read` tool; the sidecar sends where to look, never what is there.
 - Diagnostics, diffs, dirty state, saving — yazi cannot answer any of them honestly (F2).
 - Retroactive adoption of a socket that connected while the workspace did not match. Unmeasured, and the MVP does not depend on it.
