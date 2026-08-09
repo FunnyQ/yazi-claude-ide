@@ -305,104 +305,7 @@ async fn h9_pressing_twice_sends_twice_with_no_dedupe() {
 }
 
 #[tokio::test]
-async fn i5_a_range_mention_carries_zero_based_lines() {
-    let server = sidecar().await;
-    let mut client = connect(&server).await;
-    let path = fixture("Cargo.toml");
-    server.mention_range(&path, 10, 20);
-
-    let frame = next(&mut client).await;
-    assert_eq!(frame["jsonrpc"], "2.0");
-    assert_eq!(frame["method"], "at_mentioned");
-    assert!(
-        !frame
-            .as_object()
-            .expect("notification object")
-            .contains_key("id")
-    );
-    let params = frame["params"].as_object().expect("params object");
-    assert_eq!(params.len(), 3);
-    assert_eq!(params["filePath"], path);
-    // I4. The editor counts from 1 and the CLI renders `0` as `#L1`, so the pair
-    // that reaches the wire is one below the pair the editor published.
-    assert_eq!(params["lineStart"], 9);
-    assert_eq!(params["lineEnd"], 19);
-}
-
-#[tokio::test]
-async fn i5_a_single_line_range_is_a_range_of_one() {
-    let server = sidecar().await;
-    let mut client = connect(&server).await;
-    let path = fixture("Cargo.toml");
-    server.mention_range(&path, 1, 1);
-
-    let frame = next(&mut client).await;
-    assert_eq!(frame["params"]["lineStart"], 0);
-    assert_eq!(frame["params"]["lineEnd"], 0);
-}
-
-#[tokio::test]
-async fn i6_a_range_over_a_directory_is_not_mentioned() {
-    let server = sidecar().await;
-    let mut client = connect(&server).await;
-    let temp = TempDir::new().expect("tempdir");
-    server.mention_range(&temp.path().to_string_lossy(), 1, 2);
-
-    assert_eq!(client.silence(QUIET).await, None);
-}
-
-#[tokio::test]
-async fn i6_a_range_over_a_path_that_does_not_stat_is_not_mentioned() {
-    let server = sidecar().await;
-    let mut client = connect(&server).await;
-    let temp = TempDir::new().expect("tempdir");
-    let gone = temp.path().join("gone.txt");
-    std::fs::write(&gone, "gone").expect("write fixture");
-    std::fs::remove_file(&gone).expect("remove fixture");
-    server.mention_range(&gone.to_string_lossy(), 1, 2);
-
-    assert_eq!(client.silence(QUIET).await, None);
-}
-
-#[tokio::test]
-async fn i7_a_range_with_no_connection_open_sends_nothing() {
-    let server = sidecar().await;
-    let path = fixture("Cargo.toml");
-    server.mention_range(&path, 10, 20);
-
-    let mut client = connect(&server).await;
-    assert_eq!(client.silence(QUIET).await, None);
-}
-
-#[tokio::test]
-async fn i7_repeating_the_gesture_sends_twice_with_no_dedupe() {
-    let server = sidecar().await;
-    let mut client = connect(&server).await;
-    let path = fixture("Cargo.toml");
-    server.mention_range(&path, 10, 20);
-    server.mention_range(&path, 10, 20);
-
-    let first = next(&mut client).await;
-    assert_eq!(next(&mut client).await, first);
-}
-
-#[tokio::test]
-async fn i7_a_range_reaches_every_open_connection() {
-    let server = sidecar().await;
-    let mut first = connect(&server).await;
-    let mut second = connect(&server).await;
-    let path = fixture("Cargo.toml");
-    server.mention_range(&path, 10, 20);
-
-    for client in [&mut first, &mut second] {
-        let frame = next(client).await;
-        assert_eq!(frame["method"], "at_mentioned");
-        assert_eq!(frame["params"]["lineStart"], 9);
-    }
-}
-
-#[tokio::test]
-async fn i10_a_live_selection_pushes_a_zero_based_range_and_the_editors_text() {
+async fn i5_a_live_selection_pushes_a_zero_based_range_and_the_editors_text() {
     let server = sidecar().await;
     let mut client = connect(&server).await;
     let path = fixture("Cargo.toml");
@@ -414,7 +317,7 @@ async fn i10_a_live_selection_pushes_a_zero_based_range_and_the_editors_text() {
     let params = &frame["params"];
     assert_eq!(params["filePath"], path);
     assert_eq!(params["fileUrl"], format!("file://{path}"));
-    // The one push where `text` is not empty (I10). It came from the editor's
+    // The one push where `text` is not empty (I5). It came from the editor's
     // buffer — C4 still forbids the sidecar reading a file to fill it.
     assert_eq!(params["text"], "one\ntwo");
     assert_eq!(params["selection"]["start"]["line"], 9);
@@ -423,7 +326,7 @@ async fn i10_a_live_selection_pushes_a_zero_based_range_and_the_editors_text() {
 }
 
 #[tokio::test]
-async fn i10_a_live_selection_without_text_still_pushes_its_range() {
+async fn i6_a_live_selection_without_text_still_pushes_its_range() {
     let server = sidecar().await;
     let mut client = connect(&server).await;
     let path = fixture("Cargo.toml");
@@ -437,7 +340,7 @@ async fn i10_a_live_selection_without_text_still_pushes_its_range() {
 
 #[tokio::test]
 async fn c4_the_tool_payload_still_refuses_to_carry_text() {
-    // I10 is an exception for one push, not a hole in C4. The tool path answers
+    // I5 is an exception for one push, not a hole in C4. The tool path answers
     // for the yazi cursor, which never has contents to offer.
     let server = sidecar().await;
     let path = fixture("Cargo.toml");
@@ -449,7 +352,7 @@ async fn c4_the_tool_payload_still_refuses_to_carry_text() {
 }
 
 #[tokio::test]
-async fn i11_dragging_a_selection_is_never_deduped() {
+async fn i7_dragging_a_selection_is_never_deduped() {
     let server = sidecar().await;
     let mut client = connect(&server).await;
     let path = fixture("Cargo.toml");
@@ -461,7 +364,7 @@ async fn i11_dragging_a_selection_is_never_deduped() {
 }
 
 #[tokio::test]
-async fn i12_a_hover_back_onto_the_same_file_pushes_again() {
+async fn i8_a_hover_back_onto_the_same_file_pushes_again() {
     let server = sidecar().await;
     let path = fixture("Cargo.toml");
     server.set_focus(Some(&path));
@@ -483,7 +386,7 @@ async fn i12_a_hover_back_onto_the_same_file_pushes_again() {
 }
 
 #[tokio::test]
-async fn i13_a_live_selection_with_no_connection_open_is_not_queued() {
+async fn i9_a_live_selection_with_no_connection_open_is_not_queued() {
     let server = sidecar().await;
     let path = fixture("Cargo.toml");
     server.set_editor_selection(&path, 10, 20, "one\ntwo");
@@ -493,7 +396,7 @@ async fn i13_a_live_selection_with_no_connection_open_is_not_queued() {
 }
 
 #[tokio::test]
-async fn i13_a_live_selection_reaches_every_open_connection() {
+async fn i9_a_live_selection_reaches_every_open_connection() {
     let server = sidecar().await;
     let mut first = connect(&server).await;
     let mut second = connect(&server).await;
@@ -509,33 +412,13 @@ async fn i13_a_live_selection_reaches_every_open_connection() {
 }
 
 #[tokio::test]
-async fn i10_a_live_selection_over_a_directory_pushes_nothing() {
+async fn i6_a_live_selection_over_a_directory_pushes_nothing() {
     let server = sidecar().await;
     let mut client = connect(&server).await;
     let temp = TempDir::new().expect("tempdir");
     server.set_editor_selection(&temp.path().to_string_lossy(), 1, 2, "x");
 
     assert_eq!(client.silence(QUIET).await, None);
-}
-
-#[tokio::test]
-async fn i1_a_range_does_not_disturb_the_selection_push() {
-    // D6 dedupes on the last pushed path. A range mention that leaked into that
-    // state would silence the next real focus change onto the same file.
-    let server = sidecar().await;
-    let path = fixture("Cargo.toml");
-    let other = fixture("README.md");
-    server.set_focus(Some(&path));
-    let mut client = connect(&server).await;
-    assert_eq!(file_path(&next(&mut client).await), path);
-
-    server.mention_range(&other, 3, 4);
-    assert_eq!(next(&mut client).await["method"], "at_mentioned");
-
-    server.set_focus(Some(&other));
-    let frame = next(&mut client).await;
-    assert_eq!(frame["method"], "selection_changed");
-    assert_eq!(file_path(&frame), other);
 }
 
 #[tokio::test]

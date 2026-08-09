@@ -69,7 +69,6 @@ async fn main() -> std::io::Result<()> {
 
     let hover_sidecar = Arc::clone(&sidecar);
     let marked_sidecar = Arc::clone(&sidecar);
-    let range_sidecar = Arc::clone(&sidecar);
     let editor_selection_sidecar = Arc::clone(&sidecar);
     let cd_sidecar = Arc::clone(&sidecar);
     let cd_state = Arc::clone(&state);
@@ -84,16 +83,12 @@ async fn main() -> std::io::Result<()> {
                 eprintln!("yazi-claude-ide: marked {} file(s)", urls.len());
                 marked_sidecar.mention(&urls);
             }),
-            on_range: Box::new(move |url, start, end| {
-                // The editor's gesture is as invisible as H8's without a
-                // connection, and it happens behind a block opener where yazi's
-                // UI cannot report anything either.
-                eprintln!("yazi-claude-ide: range {url} L{start}-{end}");
-                range_sidecar.mention_range(url, start, end);
-            }),
             on_editor_selection: Box::new(move |url, start, end, text| {
-                // Not logged like the two above: a live selection fires on every
-                // drag, and one line per keystroke would bury the log.
+                // I10. The range, never the text — this log lands in /tmp, and the
+                // text is the contents of the user's file. It is also the only
+                // observable this channel has: no yazi UI, behind a block opener,
+                // and its whole failure mode is silence.
+                eprintln!("yazi-claude-ide: selection {url} L{start}-{end}");
                 editor_selection_sidecar.set_editor_selection(url, start, end, text);
             }),
             on_cd: Box::new(move |url| {

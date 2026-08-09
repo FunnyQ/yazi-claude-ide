@@ -9,17 +9,13 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 /// The kind the plugin publishes the marked set under (H2, H3).
 pub const MARKED_KIND: &str = "claude-marked";
 
-/// The kind the editor publishes a range mention under (I2).
-pub const SELECTION_KIND: &str = "claude-selection";
-
-/// The kind the editor publishes its live selection under (I9). Separate from
-/// `SELECTION_KIND` because a mention accumulates and a selection replaces.
+/// The kind the editor publishes its live selection under (I2).
 pub const EDITOR_SELECTION_KIND: &str = "claude-editor-selection";
 
 /// `claude-marked` is ours because yazi has no event for marked-set changes (H1);
-/// the two `claude-*selection` kinds are ours because the editor is not a yazi
-/// event source at all.
-pub const KINDS: &str = "hover,cd,claude-marked,claude-selection,claude-editor-selection";
+/// `claude-editor-selection` is ours because the editor is not a yazi event
+/// source at all.
+pub const KINDS: &str = "hover,cd,claude-marked,claude-editor-selection";
 
 /// Each liveness probe costs about 7ms.
 pub const POLL_MS: u64 = 2_000;
@@ -43,16 +39,14 @@ pub struct DdsEvent {
 
 pub type UrlFn = Box<dyn Fn(&str) + Send>;
 pub type MarkedFn = Box<dyn Fn(Vec<String>) + Send>;
-/// `(url, line_start, line_end)`, still 1-based as the editor published it (I4).
-pub type RangeFn = Box<dyn Fn(&str, u32, u32) + Send>;
-/// As `RangeFn`, plus the selected text the editor sent — `""` when it sent none.
+/// `(url, line_start, line_end, text)`. The lines are still 1-based as the editor
+/// published them (I4), and `text` is `""` when the editor sent none (I6).
 pub type EditorSelectionFn = Box<dyn Fn(&str, u32, u32, &str) + Send>;
 
 pub struct StreamHandlers {
     pub on_hover: UrlFn,
     pub on_cd: UrlFn,
     pub on_marked: MarkedFn,
-    pub on_range: RangeFn,
     pub on_editor_selection: EditorSelectionFn,
 }
 
@@ -116,11 +110,10 @@ pub fn dispatch(line: &str, yazi_id: &str, handlers: &StreamHandlers) {
     };
 
     // Before the sender check, not after: `ya pub-to` publishes under an id of its
-    // own, so a range never carries the sender G2 filters on. `yaziId` in the body
-    // is what ties it to this instance, and I2's broadcast means every other
+    // own, so a selection never carries the sender G2 filters on. `yaziId` in the
+    // body is what ties it to this instance, and I2's broadcast means every other
     // sidecar on the machine is reading this same line (I3).
-    let from_editor = event.kind == SELECTION_KIND || event.kind == EDITOR_SELECTION_KIND;
-    if from_editor {
+    if event.kind == EDITOR_SELECTION_KIND {
         let claimed = match event.body.get("yaziId") {
             Some(Value::String(id)) => id.clone(),
             Some(Value::Number(id)) => id.to_string(),
@@ -132,14 +125,10 @@ pub fn dispatch(line: &str, yazi_id: &str, handlers: &StreamHandlers) {
         let Some((url, start, end)) = range_of(&event.body) else {
             return;
         };
-        if event.kind == SELECTION_KIND {
-            (handlers.on_range)(url, start, end);
-        } else {
-            // Absent text is not malformed (I9): an editor may omit it on a huge
-            // selection, and the range is still worth pushing.
-            let text = event.body.get("text").and_then(Value::as_str).unwrap_or("");
-            (handlers.on_editor_selection)(url, start, end, text);
-        }
+        // Absent text is not malformed (I6): an editor may omit it on a huge
+        // selection, and the range is still worth pushing.
+        let text = event.body.get("text").and_then(Value::as_str).unwrap_or("");
+        (handlers.on_editor_selection)(url, start, end, text);
         return;
     }
 
@@ -376,7 +365,6 @@ mod tests {
             on_hover: Box::new(move |url| hover.lock().unwrap().push(url.to_string())),
             on_cd: Box::new(move |url| cd.lock().unwrap().push(url.to_string())),
             on_marked: Box::new(move |urls| marked.lock().unwrap().push(urls)),
-            on_range: Box::new(|_, _, _| {}),
             on_editor_selection: Box::new(|_, _, _, _| {}),
         }
     }
@@ -403,19 +391,6 @@ mod tests {
         (marked, handlers)
     }
 
-    /// Handlers wired so only the range sink is observable.
-    fn range_probe() -> (Ranges, StreamHandlers) {
-        let ranges: Ranges = Arc::new(Mutex::new(Vec::new()));
-        let sink = Arc::clone(&ranges);
-        let handlers = StreamHandlers {
-            on_range: Box::new(move |url, start, end| {
-                sink.lock().unwrap().push((url.to_string(), start, end))
-            }),
-            ..handlers(calls(), calls(), marks())
-        };
-        (ranges, handlers)
-    }
-
     /// Handlers wired so only the live-selection sink is observable.
     fn editor_selection_probe() -> (Selections, StreamHandlers) {
         let ranges: Selections = Arc::new(Mutex::new(Vec::new()));
@@ -431,224 +406,173 @@ mod tests {
         (ranges, handlers)
     }
 
-    type Ranges = Arc<Mutex<Vec<(String, u32, u32)>>>;
     type Selections = Arc<Mutex<Vec<(String, u32, u32, String)>>>;
-
-    /// A `claude-selection` line as `ya pub-to 0` really writes it: `sender` is
-    /// the publishing `ya`'s own id, never the yazi the editor belongs to (I3).
-    fn range_line(yazi_id: &str, body: &str) -> String {
-        format!("claude-selection,0,some-other-ya,{{\"yaziId\":{yazi_id},{body}}}")
-    }
 
     #[test]
     fn h3_kinds_contains_marked_kind() {
         assert!(KINDS.split(',').any(|kind| kind == MARKED_KIND));
     }
 
-    #[test]
-    fn i2_kinds_contains_selection_kind() {
-        assert!(KINDS.split(',').any(|kind| kind == SELECTION_KIND));
+    /// A `claude-editor-selection` line as `ya pub-to 0` really writes it:
+    /// `sender` is the publishing `ya`'s own id, never the yazi the editor
+    /// belongs to (I3).
+    fn selection_line(yazi_id: &str, body: &str) -> String {
+        format!("claude-editor-selection,0,some-other-ya,{{\"yaziId\":{yazi_id},{body}}}")
     }
 
     #[test]
-    fn i9_kinds_contains_editor_selection_kind() {
+    fn i2_kinds_contains_editor_selection_kind() {
         assert!(KINDS.split(',').any(|kind| kind == EDITOR_SELECTION_KIND));
     }
 
     #[test]
-    fn i9_a_live_selection_reaches_its_own_handler() {
-        let (ranges, handlers) = editor_selection_probe();
+    fn i3_a_selection_is_matched_on_yazi_id_not_sender() {
+        let (selections, handlers) = editor_selection_probe();
         dispatch(
-            r#"claude-editor-selection,0,some-other-ya,{"yaziId":"ours","url":"/tmp/one.txt","lineStart":10,"lineEnd":20,"text":"one\ntwo"}"#,
-            "ours",
-            &handlers,
-        );
-        assert_eq!(
-            *ranges.lock().unwrap(),
-            [("/tmp/one.txt".to_owned(), 10, 20, "one\ntwo".to_owned())]
-        );
-    }
-
-    #[test]
-    fn i9_a_live_selection_without_text_is_still_delivered() {
-        // I9 lets an editor omit `text` on a selection too big to be worth
-        // sending. That is a range without a line count, not a malformed body.
-        let (ranges, handlers) = editor_selection_probe();
-        dispatch(
-            r#"claude-editor-selection,0,some-other-ya,{"yaziId":"ours","url":"/tmp/one.txt","lineStart":10,"lineEnd":20}"#,
-            "ours",
-            &handlers,
-        );
-        assert_eq!(
-            *ranges.lock().unwrap(),
-            [("/tmp/one.txt".to_owned(), 10, 20, String::new())]
-        );
-    }
-
-    #[test]
-    fn i9_a_live_selection_is_not_a_mention() {
-        // The two kinds share every validation rule and nothing else. Crossing
-        // them would turn a drag into a prompt full of mentions.
-        let (mentions, handlers) = range_probe();
-        dispatch(
-            r#"claude-editor-selection,0,some-other-ya,{"yaziId":"ours","url":"/tmp/one.txt","lineStart":1,"lineEnd":2}"#,
-            "ours",
-            &handlers,
-        );
-        assert!(mentions.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn i9_a_live_selection_for_another_yazi_is_ignored() {
-        let (ranges, handlers) = editor_selection_probe();
-        dispatch(
-            r#"claude-editor-selection,0,some-other-ya,{"yaziId":"theirs","url":"/tmp/one.txt","lineStart":10,"lineEnd":20}"#,
-            "ours",
-            &handlers,
-        );
-        assert!(ranges.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn i9_a_malformed_live_selection_is_dropped() {
-        let (ranges, handlers) = editor_selection_probe();
-        dispatch(
-            r#"claude-editor-selection,0,some-other-ya,{"yaziId":"ours","url":"/tmp/one.txt","lineStart":20,"lineEnd":10}"#,
-            "ours",
-            &handlers,
-        );
-        assert!(ranges.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn i3_a_range_is_matched_on_yazi_id_not_sender() {
-        let (ranges, handlers) = range_probe();
-        dispatch(
-            &range_line(
+            &selection_line(
                 "\"ours\"",
-                r#""url":"/tmp/one.txt","lineStart":10,"lineEnd":20"#,
+                r#""url":"/tmp/one.txt","lineStart":10,"lineEnd":20,"text":"one\ntwo""#,
             ),
             "ours",
             &handlers,
         );
         assert_eq!(
-            *ranges.lock().unwrap(),
-            [("/tmp/one.txt".to_owned(), 10, 20)]
+            *selections.lock().unwrap(),
+            [("/tmp/one.txt".to_owned(), 10, 20, "one\ntwo".to_owned())]
         );
     }
 
     #[test]
-    fn i3_a_range_for_another_yazi_is_ignored() {
-        let (ranges, handlers) = range_probe();
+    fn i3_a_selection_for_another_yazi_is_ignored() {
+        let (selections, handlers) = editor_selection_probe();
         dispatch(
-            &range_line(
+            &selection_line(
                 "\"theirs\"",
                 r#""url":"/tmp/one.txt","lineStart":10,"lineEnd":20"#,
             ),
             "ours",
             &handlers,
         );
-        assert!(ranges.lock().unwrap().is_empty());
+        assert!(selections.lock().unwrap().is_empty());
     }
 
     #[test]
     fn i3_a_numeric_yazi_id_matches_too() {
-        let (ranges, handlers) = range_probe();
+        let (selections, handlers) = editor_selection_probe();
         dispatch(
-            &range_line("175", r#""url":"/tmp/one.txt","lineStart":1,"lineEnd":1"#),
+            &selection_line("175", r#""url":"/tmp/one.txt","lineStart":1,"lineEnd":1"#),
             "175",
             &handlers,
         );
-        assert_eq!(ranges.lock().unwrap().len(), 1);
+        assert_eq!(selections.lock().unwrap().len(), 1);
     }
 
     #[test]
-    fn i3_a_range_without_a_yazi_id_is_dropped() {
-        let (ranges, handlers) = range_probe();
+    fn i3_a_selection_without_a_yazi_id_is_dropped() {
+        let (selections, handlers) = editor_selection_probe();
         dispatch(
-            r#"claude-selection,0,ours,{"url":"/tmp/one.txt","lineStart":10,"lineEnd":20}"#,
+            r#"claude-editor-selection,0,ours,{"url":"/tmp/one.txt","lineStart":10,"lineEnd":20}"#,
             "ours",
             &handlers,
         );
-        assert!(ranges.lock().unwrap().is_empty());
+        assert!(selections.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn i6_a_selection_without_text_is_still_delivered() {
+        // I6 lets an editor omit `text` on a selection too big to be worth
+        // sending. That is a range without a line count, not a malformed body.
+        let (selections, handlers) = editor_selection_probe();
+        dispatch(
+            &selection_line(
+                "\"ours\"",
+                r#""url":"/tmp/one.txt","lineStart":10,"lineEnd":20"#,
+            ),
+            "ours",
+            &handlers,
+        );
+        assert_eq!(
+            *selections.lock().unwrap(),
+            [("/tmp/one.txt".to_owned(), 10, 20, String::new())]
+        );
     }
 
     #[test]
     fn i6_an_empty_url_is_dropped() {
-        let (ranges, handlers) = range_probe();
+        let (selections, handlers) = editor_selection_probe();
         dispatch(
-            &range_line("\"ours\"", r#""url":"","lineStart":10,"lineEnd":20"#),
+            &selection_line("\"ours\"", r#""url":"","lineStart":10,"lineEnd":20"#),
             "ours",
             &handlers,
         );
-        assert!(ranges.lock().unwrap().is_empty());
+        assert!(selections.lock().unwrap().is_empty());
     }
 
     #[test]
     fn i6_a_missing_line_is_dropped() {
-        let (ranges, handlers) = range_probe();
+        let (selections, handlers) = editor_selection_probe();
         dispatch(
-            &range_line("\"ours\"", r#""url":"/tmp/one.txt","lineStart":10"#),
+            &selection_line("\"ours\"", r#""url":"/tmp/one.txt","lineStart":10"#),
             "ours",
             &handlers,
         );
-        assert!(ranges.lock().unwrap().is_empty());
+        assert!(selections.lock().unwrap().is_empty());
     }
 
     #[test]
     fn i6_a_non_numeric_line_is_dropped() {
-        let (ranges, handlers) = range_probe();
+        let (selections, handlers) = editor_selection_probe();
         dispatch(
-            &range_line(
+            &selection_line(
                 "\"ours\"",
                 r#""url":"/tmp/one.txt","lineStart":"10","lineEnd":20"#,
             ),
             "ours",
             &handlers,
         );
-        assert!(ranges.lock().unwrap().is_empty());
+        assert!(selections.lock().unwrap().is_empty());
     }
 
     #[test]
     fn i6_line_zero_is_dropped() {
-        let (ranges, handlers) = range_probe();
+        let (selections, handlers) = editor_selection_probe();
         dispatch(
-            &range_line(
+            &selection_line(
                 "\"ours\"",
                 r#""url":"/tmp/one.txt","lineStart":0,"lineEnd":20"#,
             ),
             "ours",
             &handlers,
         );
-        assert!(ranges.lock().unwrap().is_empty());
+        assert!(selections.lock().unwrap().is_empty());
     }
 
     #[test]
     fn i6_a_reversed_range_is_dropped() {
-        let (ranges, handlers) = range_probe();
+        let (selections, handlers) = editor_selection_probe();
         dispatch(
-            &range_line(
+            &selection_line(
                 "\"ours\"",
                 r#""url":"/tmp/one.txt","lineStart":20,"lineEnd":10"#,
             ),
             "ours",
             &handlers,
         );
-        assert!(ranges.lock().unwrap().is_empty());
+        assert!(selections.lock().unwrap().is_empty());
     }
 
     #[test]
     fn i6_a_line_beyond_u32_is_dropped() {
-        let (ranges, handlers) = range_probe();
+        let (selections, handlers) = editor_selection_probe();
         dispatch(
-            &range_line(
+            &selection_line(
                 "\"ours\"",
                 r#""url":"/tmp/one.txt","lineStart":1,"lineEnd":4294967296"#,
             ),
             "ours",
             &handlers,
         );
-        assert!(ranges.lock().unwrap().is_empty());
+        assert!(selections.lock().unwrap().is_empty());
     }
 
     #[test]

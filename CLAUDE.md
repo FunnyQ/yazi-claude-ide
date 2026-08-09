@@ -31,7 +31,7 @@ Adding or changing behaviour means changing the contract first, then the test na
 - `dev/docs/baseline.md` — measurements behind F5, H4, the protocol version
 - `dev/docs/yazi-capability.md` — the double-fork and `ya.sync` measurements behind G3, H2
 
-Four clauses have no automated test, on purpose: **B7** is marked `[manual]` and only `harness.sh verify` reaches it; **H1** and **H2** govern the Lua plugin, which no Rust test can reach; and **I8** is a standing assumption about yazi, not about `src/` — `harness.sh verify` re-checks it against a real block opener.
+Four clauses have no automated test, on purpose: **B7** is marked `[manual]` and only `harness.sh verify` reaches it; **H1** and **H2** govern the Lua plugin, which no Rust test can reach; and **I11** is a standing assumption about yazi, not about `src/` — `harness.sh verify` re-checks it against a real block opener.
 
 ## Architecture
 
@@ -44,7 +44,7 @@ yazi ──ya.sync──► ps.pub_to(0, "claude-marked")        main.lua
        ▼
      yazi-claude-ide
        main.rs    YAZI_ID guard · wiring · SIGINT/SIGTERM · shutdown
-       yazi.rs    `ya sub hover,cd,claude-marked,claude-selection,claude-editor-selection` · `ya emit-to reveal` · liveness poll
+       yazi.rs    `ya sub hover,cd,claude-marked,claude-editor-selection` · `ya emit-to reveal` · liveness poll
        lock.rs    <config>/ide/<port>.lock · anchor_for · workspace_folders · reclaim_stale
        server.rs  TcpListener 127.0.0.1:0 · accept_hdr_async · per-connection mpsc
          tools.rs   ADVERTISED · selection_payload · call_tool
@@ -58,21 +58,21 @@ yazi ──ya.sync──► ps.pub_to(0, "claude-marked")        main.lua
 | --- | --- | --- |
 | `src/lock.rs` | A, B | `mod tests` in file |
 | `src/tools.rs` | B6, C, E2, F | `mod tests` in file |
-| `src/yazi.rs` | G2, G3, H3, I2, I3, I6, I9 | `mod tests` in file |
-| `src/server.rs` | A5, D, E, I5, I7, I10–I13 | `tests/server_rpc.rs`, `tests/server_push.rs` |
+| `src/yazi.rs` | G2, G3, H3, I2, I3, I6 | `mod tests` in file |
+| `src/server.rs` | A5, D, E, I5–I9 | `tests/server_rpc.rs`, `tests/server_push.rs` |
 | `src/main.rs` | A6, B1, B3, G1–G3 | `tests/lifecycle.rs` |
 
 `tests/common/mod.rs` holds the async WebSocket client both server test files use. `tests/lifecycle.rs` drives the **compiled binary** via `env!("CARGO_BIN_EXE_yazi-claude-ide")` — it is the only check that proves the four modules compose, since the module tests call `start_sidecar` directly and cannot catch broken wiring.
 
-### Four channels to Claude
+### Three channels to Claude
 
-Moving yazi's cursor pushes `selection_changed` — **the path alone, never contents**. Pressing the plugin's key publishes the marked set, which the sidecar fans out as one `at_mentioned` notification per path. The editor yazi's block opener runs supplies the other two, and both are ranges a file manager could never know (section I): `claude-selection` is a gesture that becomes one `at_mentioned` with a line range, while `claude-editor-selection` is live state that becomes a `selection_changed` with a range and drives the CLI's "N lines selected" display. The sidecar never reads a file; Claude does, when the user submits.
+Moving yazi's cursor pushes `selection_changed` — **the path alone, never contents**. Pressing the plugin's key publishes the marked set, which the sidecar fans out as one `at_mentioned` notification per path. The editor yazi's block opener runs publishes `claude-editor-selection` as the user drags a selection, which becomes a `selection_changed` carrying a range a file manager could never know (section I). From yazi the sidecar never reads a file; Claude does, when the user submits.
 
-**`claude-editor-selection` is the one thing this sidecar forwards that is not a path.** Its `text` carries the lines the user selected, because the CLI counts its `N lines selected` display from the contents and not from `selection`. C4 is untouched: the editor already had those lines in a buffer, and no code path here opens a file. Do not "restore consistency" by emptying that field — but do understand what it buys, because the chip is the smaller half: with `text` present the agent's context receives the selected lines verbatim, with no submission and no mention, where an empty `text` yields only `The user opened the file <path> in the IDE.` Both halves are measured in [baseline.md](baseline.md), and I10 states the promise.
+**`claude-editor-selection` is the one thing this sidecar forwards that is not a path.** Its `text` carries the lines the user selected, because the CLI counts its `N lines selected` display from the contents and not from `selection`. C4 is untouched: the editor already had those lines in a buffer, and no code path here opens a file. Do not "restore consistency" by emptying that field — but do understand what it buys, because the chip is the smaller half: with `text` present the agent's context receives the selected lines verbatim, with no submission and no mention, where an empty `text` yields only `The user opened the file <path> in the IDE.` Both halves are measured in [baseline.md](baseline.md), and I5 states the promise. The log line the same channel writes deliberately carries the range and **not** the text — that log lands in `/tmp`.
 
-The two editor kinds share their addressing and validation and agree on nothing else. A mention accumulates in the prompt and survives submission, so it is deduped never and logged always. A live selection replaces a single slot, fires on every keystroke of a drag, and is therefore **deliberately not logged** — one line per keystroke would bury the log that makes the other three debuggable. It also clears `last_pushed` on the way out (I12), which is the only reason a yazi hover back onto the file the editor just left says anything at all.
+The third channel does not come from yazi and does not obey G2. An external `ya pub-to` is its own DDS peer, so `sender` names that `ya`, never the yazi the editor belongs to; and `ya pub-to <yazi id>` is refused outright, because a yazi accepts only kinds its own plugins subscribed to. Broadcast is the only route left, which puts the line in front of **every sidecar on the machine** — `yaziId` in the body is the whole of the addressing, and `dispatch` therefore branches on `claude-editor-selection` *before* the sender check. Both facts are measured; see clause I3.
 
-The third channel does not come from yazi and does not obey G2. An external `ya pub-to` is its own DDS peer, so `sender` names that `ya`, never the yazi the editor belongs to; and `ya pub-to <yazi id>` is refused outright, because a yazi accepts only kinds its own plugins subscribed to. Broadcast is the only route left, which puts the line in front of **every sidecar on the machine** — `yaziId` in the body is the whole of the addressing, and `dispatch` therefore branches on `claude-selection` *before* the sender check. Both facts are measured; see clause I3.
+**An earlier version of section I also carried a keypress gesture** that became an `at_mentioned` with a line range, rendering `@file#L10-20`. It worked and was deleted: the live selection already puts the same lines in front of the agent, so the gesture had no failure left to prevent. `git log` has it if the accumulating-mention behaviour is ever wanted back.
 
 ## Invariants that are easy to break
 

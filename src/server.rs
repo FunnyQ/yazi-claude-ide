@@ -114,28 +114,7 @@ impl Sidecar {
         }
     }
 
-    /// I5. `line_start` and `line_end` arrive 1-based, as the editor counts them.
-    pub fn mention_range(&self, file_path: &str, line_start: u32, line_end: u32) {
-        // C5's test, not H6's: a range over a directory means nothing (I6).
-        if !tools::is_file(file_path) {
-            return;
-        }
-        // The one place H4's omission does not apply — the editor really has a
-        // range. `0` is the CLI's first line, so the pair drops by one (I4).
-        let frame = json!({
-            "jsonrpc": "2.0",
-            "method": "at_mentioned",
-            "params": {
-                "filePath": file_path,
-                "lineStart": line_start.saturating_sub(1),
-                "lineEnd": line_end.saturating_sub(1),
-            },
-        })
-        .to_string();
-        self.inner.broadcast(frame);
-    }
-
-    /// I10. The editor's live selection, 1-based and inclusive as it published it.
+    /// I5. The editor's live selection, 1-based and inclusive as it published it.
     /// `text` is the editor's own buffer contents — the sidecar never reads a file
     /// to fill it (C4), and `""` is what an editor that omitted it gets.
     pub fn set_editor_selection(
@@ -148,7 +127,7 @@ impl Sidecar {
         if !tools::is_file(file_path) {
             return;
         }
-        // No dedupe (I11): dragging a selection sends range after range for one
+        // No dedupe (I7): dragging a selection sends range after range for one
         // unchanged path, and D6's path-keyed check would swallow all but the first.
         let frame = json!({
             "jsonrpc": "2.0",
@@ -168,7 +147,7 @@ impl Sidecar {
         if !self.inner.broadcast(frame) {
             return;
         }
-        // I12. The CLI now displays a range, and D6 would keep the next hover onto
+        // I8. The CLI now displays a range, and D6 would keep the next hover onto
         // this same file silent — leaving that range on screen after the user has
         // left it. Forgetting the path is what makes that hover speak again.
         if let Ok(mut state) = self.inner.state.lock() {

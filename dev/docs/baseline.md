@@ -254,12 +254,15 @@ Measured against Claude Code **2.1.226** — a later build than the 2.1.223 the 
 
   `0` is read as line one, not as "no range". A marked file in a file manager has no range, so **the fields must be omitted, not zeroed**.
 
-  The third row was measured on 2026-08-09 against 2.1.226, through the whole
-  section I path: a Neovim opened by yazi's block opener published lines 29-30,
-  and the sidecar's 1-based-to-0-based conversion (I4) put `28, 29` on the wire.
-  So the pair is 0-based and **inclusive** — `28, 29` is two lines, not three —
-  and the render is `#L<first>-<last>` counting from 1. Until this measurement
-  the range row was an inference from the `0, 0` row above it.
+  The third row was measured on 2026-08-09 against 2.1.226, through a range
+  mention published by a Neovim that yazi's block opener had started: the
+  sidecar's 1-based-to-0-based conversion (I4) put `28, 29` on the wire. So the
+  pair is 0-based and **inclusive** — `28, 29` is two lines, not three — and the
+  render is `#L<first>-<last>` counting from 1. Until this measurement the range
+  row was an inference from the `0, 0` row above it. **The channel that produced
+  it no longer exists**: the range mention was removed once the live selection of
+  section I covered the same need. The measurement stands as a fact about the
+  CLI, and is what a future range-carrying `at_mentioned` would rest on.
 
 Untested and worth knowing before relying on this: whether `at_mentioned` is accepted while the prompt already holds text the user is typing, and whether the mention survives if the user never submits it.
 
@@ -277,7 +280,7 @@ no editor involved, so `text` was the only variable.
 The frame with the empty `text` was **accepted, not rejected** — it drew the
 plain file chip, exactly what an empty selection draws. So `selection` alone
 cannot produce a line count, and an IDE that declines to send contents cannot
-have that display. This is the measurement behind clause I10, and behind the
+have that display. This is the measurement behind clause I5, and behind the
 one place in this project where `text` is not `""`.
 
 **The chip is the smaller half of what `text` does.** Measured the same day
@@ -291,7 +294,7 @@ The user selected the lines 7 to 14 from <path>:
 where an empty `text` produces only `The user opened the file <path> in the
 IDE.` So `text` is not a display detail — **it puts the selected lines in front
 of the agent with no submission and no `@` mention**, which is a larger promise
-than "drives a line count" and is why I10 spells the consequence out rather than
+than "drives a line count" and is why I5 spells the consequence out rather than
 leaving it to be discovered.
 
 ### A mention delivers contents; a selection delivers only a path

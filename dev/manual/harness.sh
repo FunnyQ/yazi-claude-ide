@@ -27,7 +27,7 @@ export YAZI_CONFIG_HOME="$HERE/config"
 export CLAUDE_CONFIG_DIR="$HERE/run"
 export YCI_COMMAND="$REPO/target/release/yazi-claude-ide"
 # Deterministic stand-in for nvim, so `Enter` gives us a block opener that stays
-# up and needs no terminal (I8).
+# up and needs no terminal (I11).
 export EDITOR="$HERE/block-opener"
 export YCI_BLOCK_OPENER_LOG="$HERE/run/opened"
 
@@ -190,7 +190,7 @@ verify)
 	fi
 	"$0" stop >/dev/null
 
-	# I2, I3, I8. None of this is reachable from the Rust suite: the relay only
+	# I2, I3, I11. None of this is reachable from the Rust suite: the channel only
 	# means anything with a real block opener holding the terminal, and the sender
 	# question only arises because `ya pub-to` is a separate process with an id of
 	# its own. The publish is a broadcast, so it also reaches every other sidecar
@@ -203,7 +203,7 @@ verify)
 	tm send-keys -t "$SESSION" Enter
 	sleep 2
 	relay() { # yazi id
-		ya pub-to 0 claude-selection --json \
+		ya pub-to 0 claude-editor-selection --json \
 			"{\"yaziId\":\"$1\",\"url\":\"$SANDBOX/one.txt\",\"lineStart\":10,\"lineEnd\":20}"
 		sleep 1
 	}
@@ -212,16 +212,16 @@ verify)
 	else
 		ok i "block opener holds the terminal: $(cat "$YCI_BLOCK_OPENER_LOG")"
 		relay "not-$id"
-		if grep -q 'range ' /tmp/yazi-claude-ide-*.log; then
-			bad i "a range addressed to another yazi was acted on"
+		if grep -q 'selection ' /tmp/yazi-claude-ide-*.log; then
+			bad i "a selection addressed to another yazi was acted on"
 		else
-			ok i "a range addressed to another yazi is ignored"
+			ok i "a selection addressed to another yazi is ignored"
 		fi
 		relay "$id"
-		if grep -q "range $SANDBOX/one.txt L10-20" /tmp/yazi-claude-ide-*.log; then
-			ok i "a range published from outside reached the sidecar past a block opener"
+		if grep -q "selection $SANDBOX/one.txt L10-20" /tmp/yazi-claude-ide-*.log; then
+			ok i "a selection published from outside reached the sidecar past a block opener"
 		else
-			bad i "the sidecar saw no range while the block opener was up"
+			bad i "the sidecar saw no selection while the block opener was up"
 		fi
 	fi
 	"$0" stop >/dev/null

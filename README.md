@@ -71,54 +71,42 @@ The plugin never reads a file itself. Claude does, when you submit.
 ## Line ranges from your editor
 
 A file manager has no line numbers, so neither channel above can send one. The
-editor yazi opens on `Enter` does, and it can hand the range back through the
-same sidecar — one `/ide` connection still covers both halves.
+editor yazi opens on `Enter` does, and it can hand its selection back through
+the same sidecar — one `/ide` connection still covers both halves.
 
-Bind this in Neovim. It only binds inside a yazi-opened editor, and it sends
-line numbers, never the selected text:
+Drop this in `~/.config/nvim/plugin/yazi-claude-ide.lua`. There is no keybinding
+to learn: selecting is the gesture.
 
 ```lua
--- ~/.config/nvim/lua/plugins/yazi-claude-ide.lua (or anywhere in your config)
-if vim.env.YAZI_ID then
-  vim.keymap.set("v", "<leader>ay", function()
-    local first, last = vim.fn.line("v"), vim.fn.line(".")
-    if first > last then
-      first, last = last, first
-    end
-    vim.system({
-      "ya", "pub-to", "0", "claude-selection", "--json",
-      vim.json.encode({
-        yaziId = vim.env.YAZI_ID,
-        url = vim.fn.expand("%:p"),
-        lineStart = first,
-        lineEnd = last,
-      }),
-    })
-  end, { desc = "Send the selected lines to Claude" })
+if not vim.env.YAZI_ID then
+  return
 end
-```
 
-Select lines, press `<leader>ay`, and the range arrives as a line-anchored `@`
-mention — `@file#L10-20` for lines 10 to 20.
+local function publish()
+  local path = vim.fn.expand("%:p")
+  if path == "" then
+    return
+  end
+  local first, last = vim.fn.line("v"), vim.fn.line(".")
+  if first > last then
+    first, last = last, first
+  end
+  local lines = vim.fn.getregion(vim.fn.getpos("v"), vim.fn.getpos("."), { type = vim.fn.mode() })
+  local text = table.concat(lines, "\n")
+  vim.system({
+    "ya", "pub-to", "0", "claude-editor-selection", "--json",
+    vim.json.encode({
+      yaziId = vim.env.YAZI_ID,
+      url = path,
+      lineStart = first,
+      lineEnd = last,
+      -- Dropped above 100 KB: `ggVG` is one keystroke, and the whole file would
+      -- otherwise cross DDS and the WebSocket to drive a line count.
+      text = #text <= 100 * 1024 and text or nil,
+    }),
+  })
+end
 
-To also get Claude's **"N lines selected"** display while you drag a selection,
-publish under `claude-editor-selection` as the selection changes, adding a
-`text` field with the selected lines. Claude counts them from that text and not
-from the range — measured; send the range alone and you get the plain file chip
-instead.
-
-**Know what that field does before you add it.** The selected lines go into
-Claude's context as you select them, with no submission and no `@` mention — the
-chip is only the visible half. It is never more than what you selected by hand,
-and the sidecar still never opens a file to produce it, but selecting is no
-longer a private act. Leave `text` out and you keep the range-only behaviour of
-every other channel here.
-
-That kind is live state rather than a gesture, so debounce it, send it without a
-keypress, and drop the text above some size — selecting a whole file is one
-keystroke:
-
-```lua
 local timer
 vim.api.nvim_create_autocmd({ "CursorMoved", "ModeChanged" }, {
   callback = function()
@@ -131,12 +119,22 @@ vim.api.nvim_create_autocmd({ "CursorMoved", "ModeChanged" }, {
     timer = vim.defer_fn(function()
       timer = nil
       if vim.fn.mode():match("^[vV\22]") then
-        -- same vim.system call as above, with "claude-editor-selection"
+        publish()
       end
     end, 100)
   end,
 })
 ```
+
+Select lines and Claude shows `5 lines selected`.
+
+**Know what `text` does before you send it.** The selected lines go into
+Claude's context as you select them, with no submission and no `@` mention — the
+chip is only the visible half. Claude counts the lines from that text and not
+from the range, so leaving it out costs you the count and gives you the plain
+file chip instead. It is never more than what you selected by hand, and the
+sidecar still never opens a file to produce it, but selecting is no longer a
+private act.
 
 Any editor works the same way — publish that JSON with `ya pub-to 0` and count
 lines from 1. `yaziId` is what routes it: the publish is a broadcast that
