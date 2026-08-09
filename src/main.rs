@@ -69,6 +69,7 @@ async fn main() -> std::io::Result<()> {
 
     let hover_sidecar = Arc::clone(&sidecar);
     let marked_sidecar = Arc::clone(&sidecar);
+    let range_sidecar = Arc::clone(&sidecar);
     let cd_sidecar = Arc::clone(&sidecar);
     let cd_state = Arc::clone(&state);
     let cd_dir = dir.clone();
@@ -81,6 +82,13 @@ async fn main() -> std::io::Result<()> {
                 // open connection means the H8 notification itself sends nothing.
                 eprintln!("yazi-claude-ide: marked {} file(s)", urls.len());
                 marked_sidecar.mention(&urls);
+            }),
+            on_range: Box::new(move |url, start, end| {
+                // The editor's gesture is as invisible as H8's without a
+                // connection, and it happens behind a block opener where yazi's
+                // UI cannot report anything either.
+                eprintln!("yazi-claude-ide: range {url} L{start}-{end}");
+                range_sidecar.mention_range(url, start, end);
             }),
             on_cd: Box::new(move |url| {
                 let folders = {

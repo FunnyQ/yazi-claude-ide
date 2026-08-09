@@ -114,6 +114,27 @@ impl Sidecar {
         }
     }
 
+    /// I5. `line_start` and `line_end` arrive 1-based, as the editor counts them.
+    pub fn mention_range(&self, file_path: &str, line_start: u32, line_end: u32) {
+        // C5's test, not H6's: a range over a directory means nothing (I6).
+        if !tools::is_file(file_path) {
+            return;
+        }
+        // The one place H4's omission does not apply — the editor really has a
+        // range. `0` is the CLI's first line, so the pair drops by one (I4).
+        let frame = json!({
+            "jsonrpc": "2.0",
+            "method": "at_mentioned",
+            "params": {
+                "filePath": file_path,
+                "lineStart": line_start.saturating_sub(1),
+                "lineEnd": line_end.saturating_sub(1),
+            },
+        })
+        .to_string();
+        self.inner.broadcast(frame);
+    }
+
     /// Idempotent — stopping twice is not an error.
     pub fn stop(&self) {
         let sender = self

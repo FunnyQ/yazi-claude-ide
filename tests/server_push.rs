@@ -305,6 +305,123 @@ async fn h9_pressing_twice_sends_twice_with_no_dedupe() {
 }
 
 #[tokio::test]
+async fn i5_a_range_mention_carries_zero_based_lines() {
+    let server = sidecar().await;
+    let mut client = connect(&server).await;
+    let path = fixture("Cargo.toml");
+    server.mention_range(&path, 10, 20);
+
+    let frame = next(&mut client).await;
+    assert_eq!(frame["jsonrpc"], "2.0");
+    assert_eq!(frame["method"], "at_mentioned");
+    assert!(
+        !frame
+            .as_object()
+            .expect("notification object")
+            .contains_key("id")
+    );
+    let params = frame["params"].as_object().expect("params object");
+    assert_eq!(params.len(), 3);
+    assert_eq!(params["filePath"], path);
+    // I4. The editor counts from 1 and the CLI renders `0` as `#L1`, so the pair
+    // that reaches the wire is one below the pair the editor published.
+    assert_eq!(params["lineStart"], 9);
+    assert_eq!(params["lineEnd"], 19);
+}
+
+#[tokio::test]
+async fn i5_a_single_line_range_is_a_range_of_one() {
+    let server = sidecar().await;
+    let mut client = connect(&server).await;
+    let path = fixture("Cargo.toml");
+    server.mention_range(&path, 1, 1);
+
+    let frame = next(&mut client).await;
+    assert_eq!(frame["params"]["lineStart"], 0);
+    assert_eq!(frame["params"]["lineEnd"], 0);
+}
+
+#[tokio::test]
+async fn i6_a_range_over_a_directory_is_not_mentioned() {
+    let server = sidecar().await;
+    let mut client = connect(&server).await;
+    let temp = TempDir::new().expect("tempdir");
+    server.mention_range(&temp.path().to_string_lossy(), 1, 2);
+
+    assert_eq!(client.silence(QUIET).await, None);
+}
+
+#[tokio::test]
+async fn i6_a_range_over_a_path_that_does_not_stat_is_not_mentioned() {
+    let server = sidecar().await;
+    let mut client = connect(&server).await;
+    let temp = TempDir::new().expect("tempdir");
+    let gone = temp.path().join("gone.txt");
+    std::fs::write(&gone, "gone").expect("write fixture");
+    std::fs::remove_file(&gone).expect("remove fixture");
+    server.mention_range(&gone.to_string_lossy(), 1, 2);
+
+    assert_eq!(client.silence(QUIET).await, None);
+}
+
+#[tokio::test]
+async fn i7_a_range_with_no_connection_open_sends_nothing() {
+    let server = sidecar().await;
+    let path = fixture("Cargo.toml");
+    server.mention_range(&path, 10, 20);
+
+    let mut client = connect(&server).await;
+    assert_eq!(client.silence(QUIET).await, None);
+}
+
+#[tokio::test]
+async fn i7_repeating_the_gesture_sends_twice_with_no_dedupe() {
+    let server = sidecar().await;
+    let mut client = connect(&server).await;
+    let path = fixture("Cargo.toml");
+    server.mention_range(&path, 10, 20);
+    server.mention_range(&path, 10, 20);
+
+    let first = next(&mut client).await;
+    assert_eq!(next(&mut client).await, first);
+}
+
+#[tokio::test]
+async fn i7_a_range_reaches_every_open_connection() {
+    let server = sidecar().await;
+    let mut first = connect(&server).await;
+    let mut second = connect(&server).await;
+    let path = fixture("Cargo.toml");
+    server.mention_range(&path, 10, 20);
+
+    for client in [&mut first, &mut second] {
+        let frame = next(client).await;
+        assert_eq!(frame["method"], "at_mentioned");
+        assert_eq!(frame["params"]["lineStart"], 9);
+    }
+}
+
+#[tokio::test]
+async fn i1_a_range_does_not_disturb_the_selection_push() {
+    // D6 dedupes on the last pushed path. A range mention that leaked into that
+    // state would silence the next real focus change onto the same file.
+    let server = sidecar().await;
+    let path = fixture("Cargo.toml");
+    let other = fixture("README.md");
+    server.set_focus(Some(&path));
+    let mut client = connect(&server).await;
+    assert_eq!(file_path(&next(&mut client).await), path);
+
+    server.mention_range(&other, 3, 4);
+    assert_eq!(next(&mut client).await["method"], "at_mentioned");
+
+    server.set_focus(Some(&other));
+    let frame = next(&mut client).await;
+    assert_eq!(frame["method"], "selection_changed");
+    assert_eq!(file_path(&frame), other);
+}
+
+#[tokio::test]
 async fn h5_h9_a_marked_set_larger_than_any_queue_bound_arrives_whole_and_in_order() {
     // `mention` sends a whole marked set in one synchronous loop, so nothing on the
     // connection side gets to drain between frames. A bounded queue would drop the
