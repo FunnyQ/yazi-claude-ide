@@ -309,7 +309,7 @@ async fn i5_a_live_selection_pushes_a_zero_based_range_and_the_editors_text() {
     let server = sidecar().await;
     let mut client = connect(&server).await;
     let path = fixture("Cargo.toml");
-    server.set_editor_selection(&path, 10, 20, "one\ntwo");
+    server.set_editor_selection(&path, (10, 20), (0, 37), "one\ntwo");
 
     let frame = next(&mut client).await;
     assert_eq!(frame["jsonrpc"], "2.0");
@@ -322,7 +322,45 @@ async fn i5_a_live_selection_pushes_a_zero_based_range_and_the_editors_text() {
     assert_eq!(params["text"], "one\ntwo");
     assert_eq!(params["selection"]["start"]["line"], 9);
     assert_eq!(params["selection"]["end"]["line"], 19);
+    // I4. Lines drop by one, characters do not move at all.
+    assert_eq!(params["selection"]["start"]["character"], 0);
+    assert_eq!(params["selection"]["end"]["character"], 37);
     assert_eq!(params["selection"]["isEmpty"], false);
+}
+
+#[tokio::test]
+async fn i4_the_last_selected_line_is_inside_the_range() {
+    // The bug this pins: lines 5 through 10 with `charEnd: 0` ends at the start
+    // of line 10, so the CLI counted 5 lines for a 6-line selection. The end
+    // column the editor sends is what puts that last line back inside.
+    let server = sidecar().await;
+    let mut client = connect(&server).await;
+    let path = fixture("Cargo.toml");
+    server.set_editor_selection(
+        &path,
+        (5, 10),
+        (0, 24),
+        "five\nsix\nseven\neight\nnine\nten",
+    );
+
+    let selection = &next(&mut client).await["params"]["selection"];
+    assert_eq!(selection["start"], json!({"line": 4, "character": 0}));
+    assert_eq!(selection["end"], json!({"line": 9, "character": 24}));
+}
+
+#[tokio::test]
+async fn i4_a_selection_inside_one_line_is_not_zero_width() {
+    // Charwise: without character offsets both ends collapsed onto the same
+    // point and the CLI had nothing to show.
+    let server = sidecar().await;
+    let mut client = connect(&server).await;
+    let path = fixture("Cargo.toml");
+    server.set_editor_selection(&path, (7, 7), (4, 11), "package");
+
+    let selection = &next(&mut client).await["params"]["selection"];
+    assert_eq!(selection["start"], json!({"line": 6, "character": 4}));
+    assert_eq!(selection["end"], json!({"line": 6, "character": 11}));
+    assert_eq!(selection["isEmpty"], false);
 }
 
 #[tokio::test]
@@ -330,7 +368,7 @@ async fn i6_a_live_selection_without_text_still_pushes_its_range() {
     let server = sidecar().await;
     let mut client = connect(&server).await;
     let path = fixture("Cargo.toml");
-    server.set_editor_selection(&path, 10, 20, "");
+    server.set_editor_selection(&path, (10, 20), (0, 0), "");
 
     let params = &next(&mut client).await["params"];
     assert_eq!(params["text"], "");
@@ -344,7 +382,7 @@ async fn c4_the_tool_payload_still_refuses_to_carry_text() {
     // for the yazi cursor, which never has contents to offer.
     let server = sidecar().await;
     let path = fixture("Cargo.toml");
-    server.set_editor_selection(&path, 10, 20, "one\ntwo");
+    server.set_editor_selection(&path, (10, 20), (0, 37), "one\ntwo");
     server.set_focus(Some(&path));
 
     let mut client = connect(&server).await;
@@ -357,7 +395,7 @@ async fn i7_dragging_a_selection_is_never_deduped() {
     let mut client = connect(&server).await;
     let path = fixture("Cargo.toml");
     for last in [11, 12, 13] {
-        server.set_editor_selection(&path, 10, last, "dragged");
+        server.set_editor_selection(&path, (10, last), (0, 4), "dragged");
         let frame = next(&mut client).await;
         assert_eq!(frame["params"]["selection"]["end"]["line"], last - 1);
     }
@@ -373,7 +411,7 @@ async fn i8_a_hover_back_onto_the_same_file_pushes_again() {
 
     // The editor replaces the CLI's single slot with a range; leaving the editor
     // and landing on the same file has to put the whole file back on screen.
-    server.set_editor_selection(&path, 10, 20, "one\ntwo");
+    server.set_editor_selection(&path, (10, 20), (0, 37), "one\ntwo");
     assert_eq!(
         next(&mut client).await["params"]["selection"]["isEmpty"],
         false
@@ -389,7 +427,7 @@ async fn i8_a_hover_back_onto_the_same_file_pushes_again() {
 async fn i9_a_live_selection_with_no_connection_open_is_not_queued() {
     let server = sidecar().await;
     let path = fixture("Cargo.toml");
-    server.set_editor_selection(&path, 10, 20, "one\ntwo");
+    server.set_editor_selection(&path, (10, 20), (0, 37), "one\ntwo");
 
     let mut client = connect(&server).await;
     assert_eq!(client.silence(QUIET).await, None);
@@ -401,7 +439,7 @@ async fn i9_a_live_selection_reaches_every_open_connection() {
     let mut first = connect(&server).await;
     let mut second = connect(&server).await;
     let path = fixture("Cargo.toml");
-    server.set_editor_selection(&path, 10, 20, "one\ntwo");
+    server.set_editor_selection(&path, (10, 20), (0, 37), "one\ntwo");
 
     for client in [&mut first, &mut second] {
         assert_eq!(
@@ -416,7 +454,7 @@ async fn i6_a_live_selection_over_a_directory_pushes_nothing() {
     let server = sidecar().await;
     let mut client = connect(&server).await;
     let temp = TempDir::new().expect("tempdir");
-    server.set_editor_selection(&temp.path().to_string_lossy(), 1, 2, "x");
+    server.set_editor_selection(&temp.path().to_string_lossy(), (1, 2), (0, 1), "x");
 
     assert_eq!(client.silence(QUIET).await, None);
 }
