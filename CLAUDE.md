@@ -98,6 +98,8 @@ The third channel does not come from yazi and does not obey G2. An external `ya 
 
 **`claude-ide.yazi/` must keep its `LICENSE` and `README.md`.** They look redundant next to the ones at the repository root, and they are not: `plugin_files()` in yazi's `yazi-cli/src/package/dependency.rs` seeds a hardcoded `["LICENSE", "README.md", "main.lua"]` and never checks whether those files exist, so a missing one aborts the whole `ya pkg add` and deploys nothing. A root `LICENSE` does not satisfy it.
 
+**Section I's two coordinate systems are not a mistake to tidy up.** `lineStart`/`lineEnd` on the wire are 1-based and inclusive and the sidecar subtracts one; `charStart`/`charEnd` are already 0-based with an exclusive end and pass through untouched. Making them agree breaks one of them. The character pair exists because the CLI's range is end-exclusive: a whole-line selection must end at the *length of the last line*, and a sidecar that filled that in would have to read the file (C4). Sending `0` there silently drops the last line from Claude's count and collapses a single-line selection to nothing — both measured, see [baseline.md](baseline.md).
+
 **Logging is `eprintln!` to stderr.** `main.lua` redirects it to `/tmp/yazi-claude-ide-<YAZI_ID>.log`. No logging framework.
 
 **Failure paths mostly swallow and continue.** That is the contract's shape — the error surface stays small on purpose.

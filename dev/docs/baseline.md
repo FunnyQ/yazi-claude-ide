@@ -266,6 +266,27 @@ Measured against Claude Code **2.1.226** — a later build than the 2.1.223 the 
 
 Untested and worth knowing before relying on this: whether `at_mentioned` is accepted while the prompt already holds text the user is typing, and whether the mention survives if the user never submits it.
 
+### The selection range is end-exclusive, and character 0 costs a line
+
+Measured 2026-08-09 against 2.1.226. A linewise selection of lines 5 through 10,
+published with the character pair left at `0`, displayed as **`5 lines selected`**
+for six selected lines. Ending at character 0 of the last line means the
+selection stops *before* that line, so the CLI is right and the payload was
+wrong.
+
+| `selection.end` for lines 5-10 | chip |
+| --- | --- |
+| `{line: 9, character: 0}` | `5 lines selected` |
+| `{line: 9, character: <length of line 10>}` | `6 lines selected` |
+
+The same omission is fatal rather than off-by-one for a selection inside a
+single line: both ends land on the same point, and the CLI has nothing to show.
+
+**The end column is the editor's to supply.** It is the length of the last
+selected line, and the sidecar cannot compute it without reading the file, which
+C4 forbids. This is why clause I3's body carries `charStart` and `charEnd` at
+all, and why they are 0-based while the lines beside them are 1-based (I4).
+
 ### The selection chip counts lines from `text`, not from `selection`
 
 Measured 2026-08-09 against 2.1.226, by publishing a `claude-editor-selection`
