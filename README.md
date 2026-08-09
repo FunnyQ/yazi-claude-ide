@@ -74,72 +74,48 @@ A file manager has no line numbers, so neither channel above can send one. The
 editor yazi opens on `Enter` does, and it can hand its selection back through
 the same sidecar — one `/ide` connection still covers both halves.
 
-Drop this in `~/.config/nvim/plugin/yazi-claude-ide.lua`. There is no keybinding
-to learn: selecting is the gesture.
+For Neovim, this repository **is** the plugin. With lazy.nvim:
 
 ```lua
-if not vim.env.YAZI_ID then
-  return
-end
+{ "FunnyQ/yazi-claude-ide" }
+```
 
-local function publish()
-  local path = vim.fn.expand("%:p")
-  if path == "" then
-    return
-  end
-  local first, last = vim.fn.line("v"), vim.fn.line(".")
-  if first > last then
-    first, last = last, first
-  end
-  local lines = vim.fn.getregion(vim.fn.getpos("v"), vim.fn.getpos("."), { type = vim.fn.mode() })
-  local text = table.concat(lines, "\n")
-  vim.system({
-    "ya", "pub-to", "0", "claude-editor-selection", "--json",
-    vim.json.encode({
-      yaziId = vim.env.YAZI_ID,
-      url = path,
-      lineStart = first,
-      lineEnd = last,
-      -- Dropped above 100 KB: `ggVG` is one keystroke, and the whole file would
-      -- otherwise cross DDS and the WebSocket to drive a line count.
-      text = #text <= 100 * 1024 and text or nil,
-    }),
-  })
-end
+No `opts`, no `setup()`, no keybinding — selecting is the gesture. It does
+nothing at all outside an editor yazi opened, so installing it costs a
+`$YAZI_ID` check at startup and nothing else.
 
-local timer
-vim.api.nvim_create_autocmd({ "CursorMoved", "ModeChanged" }, {
-  callback = function()
-    if not vim.fn.mode():match("^[vV\22]") then
-      return
-    end
-    if timer then
-      timer:stop()
-    end
-    timer = vim.defer_fn(function()
-      timer = nil
-      if vim.fn.mode():match("^[vV\22]") then
-        publish()
-      end
-    end, 100)
-  end,
-})
+Any other plugin manager works the same way; the file it needs is
+`plugin/yazi-claude-ide.lua`. Without a plugin manager, copy that one file:
+
+```sh
+curl -sSLo ~/.config/nvim/plugin/yazi-claude-ide.lua \
+  https://raw.githubusercontent.com/FunnyQ/yazi-claude-ide/main/plugin/yazi-claude-ide.lua
 ```
 
 Select lines and Claude shows `5 lines selected`.
 
-**Know what `text` does before you send it.** The selected lines go into
-Claude's context as you select them, with no submission and no `@` mention — the
-chip is only the visible half. Claude counts the lines from that text and not
-from the range, so leaving it out costs you the count and gives you the plain
-file chip instead. It is never more than what you selected by hand, and the
-sidecar still never opens a file to produce it, but selecting is no longer a
-private act.
+**Know what it sends.** The lines you select go into Claude's context as you
+select them, with no submission and no `@` mention — the chip is only the
+visible half. Claude counts them from the contents and not from the range, so
+this is the one thing here that is not just a path. It is never more than what
+you selected by hand, and the sidecar still never opens a file to produce it,
+but selecting is no longer a private act.
 
-Any editor works the same way — publish that JSON with `ya pub-to 0` and count
-lines from 1. `yaziId` is what routes it: the publish is a broadcast that
-reaches every sidecar on the machine, and each one keeps only what carries its
-own `$YAZI_ID`, which your editor inherited from the yazi that opened it.
+**Any editor can do this.** Publish this over yazi's DDS as the selection
+changes, counting lines from 1:
+
+```sh
+ya pub-to 0 claude-editor-selection --json \
+  '{"yaziId":"'"$YAZI_ID"'","url":"/abs/path.rs","lineStart":10,"lineEnd":14,"text":"..."}'
+```
+
+`yaziId` is what routes it: the publish is a broadcast that reaches every
+sidecar on the machine, and each one keeps only what carries its own
+`$YAZI_ID`, which your editor inherited from the yazi that opened it. Omit
+`text` and you keep the range without the line count.
+[`plugin/yazi-claude-ide.lua`](plugin/yazi-claude-ide.lua) is the reference
+implementation, and [`dev/docs/contract.md`](dev/docs/contract.md) section I is
+the specification.
 
 ## Two yazi instances in one repository
 

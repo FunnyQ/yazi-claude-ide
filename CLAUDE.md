@@ -38,7 +38,11 @@ Four clauses have no automated test, on purpose: **B7** is marked `[manual]` and
 `claude-ide.yazi/main.lua` (Lua) double-forks the `yazi-claude-ide` binary and exits. The binary is the **sidecar**, and it owns everything else. The two halves talk only through yazi's DDS event stream.
 
 ```
-yazi ──ya.sync──► ps.pub_to(0, "claude-marked")        main.lua
+nvim ──ya pub-to 0──► "claude-editor-selection"         plugin/yazi-claude-ide.lua
+  ▲
+  └─ block opener, inherits YAZI_ID
+
+yazi ──ya.sync──► ps.pub_to(0, "claude-marked")        claude-ide.yazi/main.lua
   │
   └─ double fork on setup(), inherits YAZI_ID
        ▼
@@ -89,6 +93,8 @@ The third channel does not come from yazi and does not obey G2. An external `ya 
 **Two `lock.rs` tests use this repository's own directory layout as a fixture.** Both build paths from `env!("CARGO_MANIFEST_DIR")` and point at `claude-ide.yazi/`. Renaming or moving a tracked top-level directory breaks `b1_the_anchor_is_the_git_root_or_the_directory_itself`: `anchor_for` shells out to `git -C <dir> rev-parse --show-toplevel`, and on a path that no longer exists git exits non-zero, so the function falls through to returning that path itself instead of the repo root. `b1_the_pair_is_anchor_then_cursor` keeps passing on the same stale path, because `workspace_folders` only builds strings and never touches disk. The same rename already cost the harness once: `dev/manual/config/plugins/claude-ide.yazi` is a tracked symlink into the plugin directory, it was left pointing at a `plugin/` that no longer exists, and the only symptom was `harness.sh start` reporting `started` while no sidecar ran. `cargo test` cannot see any of this.
 
 **A green suite does not mean a real Claude Code can connect.** `tests/common/mod.rs` builds its upgrade request from the same assumptions as `server.rs`, so any requirement both sides are blind to survives every test. That is how E6 hid from the first version onwards: Claude Code sends `Sec-WebSocket-Protocol: mcp` and hangs up on a `101` that does not echo it, while 115 tests stayed green. `dev/spike/fake-ide.ts` was blind to it too — it runs on `Bun.serve`, whose `server.upgrade()` echoes the subprotocol for you, so every measurement in `baseline.md` was taken through that blind spot. To check a claim about the real client, put a logging TCP proxy in front of the sidecar and point `~/.claude/ide/<port>.lock` at the proxy; `fake-ide.ts` is the control that tells you whether a failure is ours or upstream.
+
+**Two top-level plugin directories, for two different programs.** `claude-ide.yazi/` is the yazi plugin, installed by `ya pkg add`. `plugin/yazi-claude-ide.lua` is the Neovim plugin, installed by pointing any plugin manager at this repository — Neovim sources `plugin/*.lua` from the runtimepath root, which is why that file sits where it does and needs no `setup()`. Neither is part of the Rust build, and only the second one is the reference implementation of section I. An editor that is not Neovim replaces that file and nothing else.
 
 **`claude-ide.yazi/` must keep its `LICENSE` and `README.md`.** They look redundant next to the ones at the repository root, and they are not: `plugin_files()` in yazi's `yazi-cli/src/package/dependency.rs` seeds a hardcoded `["LICENSE", "README.md", "main.lua"]` and never checks whether those files exist, so a missing one aborts the whole `ya pkg add` and deploys nothing. A root `LICENSE` does not satisfy it.
 
