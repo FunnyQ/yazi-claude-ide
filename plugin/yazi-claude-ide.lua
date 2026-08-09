@@ -77,25 +77,29 @@ local function selection(mode)
   }
 end
 
-local function publish()
+--- A zero-width range at the cursor: how the editor says the selection is gone.
+--- The sidecar reads same-line-same-character as empty and clears the display.
+local function dismissed()
+  local cursor = vim.api.nvim_win_get_cursor(0)
+  return {
+    lineStart = cursor[1],
+    lineEnd = cursor[1],
+    charStart = cursor[2],
+    charEnd = cursor[2],
+  }
+end
+
+local function publish(body)
   local path = vim.fn.expand("%:p")
   if path == "" then
     return
   end
-  local mode = visual_mode()
-  if not mode then
-    return
-  end
-  local selected = selection(mode)
-  if not selected then
-    return
-  end
 
-  selected.yaziId = vim.env.YAZI_ID
-  selected.url = path
+  body.yaziId = vim.env.YAZI_ID
+  body.url = path
 
   vim.system(
-    { "ya", "pub-to", "0", "claude-editor-selection", "--json", vim.json.encode(selected) },
+    { "ya", "pub-to", "0", "claude-editor-selection", "--json", vim.json.encode(body) },
     { text = true },
     function(done)
       if done.code ~= 0 then
@@ -109,22 +113,47 @@ local function publish()
 end
 
 local timer
+-- Whether Claude is currently displaying a selection of ours. Without it, every
+-- cursor move in normal mode would publish another dismissal — thousands of
+-- them, fighting the `hover` pushes yazi itself is making.
+local showing = false
+
+local function cancel_pending()
+  if timer then
+    timer:stop()
+    timer = nil
+  end
+end
 
 vim.api.nvim_create_autocmd({ "CursorMoved", "ModeChanged" }, {
   group = vim.api.nvim_create_augroup("yazi_claude_ide_selection", { clear = true }),
   callback = function()
-    if not visual_mode() then
+    local mode = visual_mode()
+
+    if not mode then
+      -- Left visual mode. Drop the queued publish first: letting it land after
+      -- the dismissal would put the old selection straight back on screen.
+      cancel_pending()
+      if showing then
+        showing = false
+        publish(dismissed())
+      end
       return
     end
-    if timer then
-      timer:stop()
-    end
+
+    cancel_pending()
     timer = vim.defer_fn(function()
       timer = nil
       -- Re-checked inside the timer: the selection may be gone by now, and
       -- publishing then would leave Claude showing a range nobody is on.
-      if visual_mode() then
-        publish()
+      local live = visual_mode()
+      if not live then
+        return
+      end
+      local selected = selection(live)
+      if selected then
+        showing = true
+        publish(selected)
       end
     end, DEBOUNCE_MS)
   end,
