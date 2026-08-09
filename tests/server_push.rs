@@ -390,6 +390,40 @@ async fn c4_the_tool_payload_still_refuses_to_carry_text() {
 }
 
 #[tokio::test]
+async fn i5_a_zero_width_selection_clears_the_display() {
+    // Pressing Esc in the editor. The CLI has to go back to showing the file, and
+    // a frame still claiming a range would leave a selection nobody is on.
+    let server = sidecar().await;
+    let mut client = connect(&server).await;
+    let path = fixture("Cargo.toml");
+    server.set_editor_selection(&path, (5, 10), (0, 24), "five\nsix");
+    assert_eq!(
+        next(&mut client).await["params"]["selection"]["isEmpty"],
+        false
+    );
+
+    server.set_editor_selection(&path, (5, 5), (3, 3), "");
+    let params = &next(&mut client).await["params"];
+    assert_eq!(params["selection"]["isEmpty"], true);
+    assert_eq!(params["selection"]["start"], params["selection"]["end"]);
+    assert_eq!(params["filePath"], path);
+}
+
+#[tokio::test]
+async fn i5_a_zero_width_selection_carries_no_text() {
+    // Whatever the editor sent. A selection covering nothing has no contents, and
+    // the CLI counts its display from this field.
+    let server = sidecar().await;
+    let mut client = connect(&server).await;
+    let path = fixture("Cargo.toml");
+    server.set_editor_selection(&path, (5, 5), (3, 3), "leftover");
+
+    let params = &next(&mut client).await["params"];
+    assert_eq!(params["text"], "");
+    assert_eq!(params["selection"]["isEmpty"], true);
+}
+
+#[tokio::test]
 async fn i7_dragging_a_selection_is_never_deduped() {
     let server = sidecar().await;
     let mut client = connect(&server).await;

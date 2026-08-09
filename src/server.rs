@@ -128,6 +128,13 @@ impl Sidecar {
         if !tools::is_file(file_path) {
             return;
         }
+        // Derived, never asserted (I5). A zero-width range is how an editor says
+        // the selection is gone, and claiming `isEmpty: false` there would leave
+        // the CLI showing a selection the user has already dismissed.
+        let is_empty = lines.0 == lines.1 && chars.0 == chars.1;
+        // A selection covering nothing has no contents, whatever the editor sent —
+        // and the CLI counts its display from this field.
+        let text = if is_empty { "" } else { text };
         // No dedupe (I7): dragging a selection sends range after range for one
         // unchanged path, and D6's path-keyed check would swallow all but the first.
         let frame = json!({
@@ -140,7 +147,7 @@ impl Sidecar {
                 "selection": Selection {
                     start: Position { line: lines.0.saturating_sub(1), character: chars.0 },
                     end: Position { line: lines.1.saturating_sub(1), character: chars.1 },
-                    is_empty: false,
+                    is_empty,
                 },
             },
         })
