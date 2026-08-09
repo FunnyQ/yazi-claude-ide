@@ -26,19 +26,30 @@ SANDBOX="$REPO/dev/spike/yazi/sandbox"
 export YAZI_CONFIG_HOME="$HERE/config"
 export CLAUDE_CONFIG_DIR="$HERE/run"
 export YCI_COMMAND="$REPO/target/release/yazi-claude-ide"
+# Deterministic stand-in for nvim, so `Enter` gives us a block opener that stays
+# up and needs no terminal (I8).
+export EDITOR="$HERE/block-opener"
+export YCI_BLOCK_OPENER_LOG="$HERE/run/opened"
 
 tm() { tmux -L "$SOCKET" "$@"; }
 
 # One yazi in its own tmux session. `verify` starts a second one for G4.
 launch() { # session, directory
 	tm new-session -d -s "$1" -x 200 -y 50 \
-		"env YAZI_CONFIG_HOME=$YAZI_CONFIG_HOME CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR YCI_COMMAND='$YCI_COMMAND' yazi $2"
+		"env YAZI_CONFIG_HOME=$YAZI_CONFIG_HOME CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR YCI_COMMAND='$YCI_COMMAND' EDITOR='$EDITOR' YCI_BLOCK_OPENER_LOG='$YCI_BLOCK_OPENER_LOG' yazi $2"
 }
 
 teardown() {
 	tm kill-server 2>/dev/null || true
+	# Kill this harness's `ya sub` by parent, never by command line. Every sidecar
+	# on the machine runs a byte-identical `ya sub`, so `pkill -f` on it reaches
+	# into the developer's own yazi sessions — and the only symptom there is that
+	# they quietly stop pushing to Claude, with the lock file still in place.
+	for sidecar in $(pgrep -f '/target/release/yazi-claude-ide$'); do
+		pkill -P "$sidecar" -f '^ya sub' 2>/dev/null || true
+	done
 	pkill -f '/target/release/yazi-claude-ide$' 2>/dev/null || true
-	pkill -f 'ya sub hover,cd,claude-marked' 2>/dev/null || true
+	pkill -f "$HERE/block-opener" 2>/dev/null || true
 }
 
 # The plugin writes one log per instance, and the sidecar's first line names both
@@ -176,6 +187,42 @@ verify)
 		ok h "the marked set reached the sidecar"
 	else
 		bad h "pressing cv published nothing the sidecar saw"
+	fi
+	"$0" stop >/dev/null
+
+	# I2, I3, I8. None of this is reachable from the Rust suite: the relay only
+	# means anything with a real block opener holding the terminal, and the sender
+	# question only arises because `ya pub-to` is a separate process with an id of
+	# its own. The publish is a broadcast, so it also reaches every other sidecar
+	# on this machine — the wrong-id case below is what keeps it from landing
+	# there, and it is checked with a live one, not a mock.
+	"$0" start >/dev/null
+	rm -f "$YCI_BLOCK_OPENER_LOG"
+	id=$(ids | head -1)
+	for k in j j; do tm send-keys -t "$SESSION" "$k"; sleep 0.5; done
+	tm send-keys -t "$SESSION" Enter
+	sleep 2
+	relay() { # yazi id
+		ya pub-to 0 claude-selection --json \
+			"{\"yaziId\":\"$1\",\"url\":\"$SANDBOX/one.txt\",\"lineStart\":10,\"lineEnd\":20}"
+		sleep 1
+	}
+	if [ ! -s "$YCI_BLOCK_OPENER_LOG" ]; then
+		bad i "Enter did not hand the terminal to a block opener"
+	else
+		ok i "block opener holds the terminal: $(cat "$YCI_BLOCK_OPENER_LOG")"
+		relay "not-$id"
+		if grep -q 'range ' /tmp/yazi-claude-ide-*.log; then
+			bad i "a range addressed to another yazi was acted on"
+		else
+			ok i "a range addressed to another yazi is ignored"
+		fi
+		relay "$id"
+		if grep -q "range $SANDBOX/one.txt L10-20" /tmp/yazi-claude-ide-*.log; then
+			ok i "a range published from outside reached the sidecar past a block opener"
+		else
+			bad i "the sidecar saw no range while the block opener was up"
+		fi
 	fi
 	"$0" stop >/dev/null
 

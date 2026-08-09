@@ -1,0 +1,6 @@
+#!/bin/sh
+# Stands in for nvim in `harness.sh verify`. A real editor would need a terminal
+# and a way to quit it; all the harness needs is a process that holds yazi's
+# block opener open while the relay is exercised (I8).
+echo "$*" >"${YCI_BLOCK_OPENER_LOG:-/dev/null}"
+sleep 300
