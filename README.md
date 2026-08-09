@@ -101,11 +101,47 @@ end
 Select lines, press `<leader>ay`, and the range arrives as a line-anchored `@`
 mention — `@file#L10-20` for lines 10 to 20.
 
-Any editor works the same way — publish that JSON with `ya pub-to 0
-claude-selection` and count lines from 1. `yaziId` is what routes it: the
-publish is a broadcast that reaches every sidecar on the machine, and each one
-keeps only the ranges carrying its own `$YAZI_ID`, which your editor inherited
-from the yazi that opened it.
+To also get Claude's **"N lines selected"** display while you drag a selection,
+publish under `claude-editor-selection` as the selection changes, adding a
+`text` field with the selected lines. Claude counts them from that text and not
+from the range — measured; send the range alone and you get the plain file chip
+instead.
+
+**Know what that field does before you add it.** The selected lines go into
+Claude's context as you select them, with no submission and no `@` mention — the
+chip is only the visible half. It is never more than what you selected by hand,
+and the sidecar still never opens a file to produce it, but selecting is no
+longer a private act. Leave `text` out and you keep the range-only behaviour of
+every other channel here.
+
+That kind is live state rather than a gesture, so debounce it, send it without a
+keypress, and drop the text above some size — selecting a whole file is one
+keystroke:
+
+```lua
+local timer
+vim.api.nvim_create_autocmd({ "CursorMoved", "ModeChanged" }, {
+  callback = function()
+    if not vim.fn.mode():match("^[vV\22]") then
+      return
+    end
+    if timer then
+      timer:stop()
+    end
+    timer = vim.defer_fn(function()
+      timer = nil
+      if vim.fn.mode():match("^[vV\22]") then
+        -- same vim.system call as above, with "claude-editor-selection"
+      end
+    end, 100)
+  end,
+})
+```
+
+Any editor works the same way — publish that JSON with `ya pub-to 0` and count
+lines from 1. `yaziId` is what routes it: the publish is a broadcast that
+reaches every sidecar on the machine, and each one keeps only what carries its
+own `$YAZI_ID`, which your editor inherited from the yazi that opened it.
 
 ## Two yazi instances in one repository
 

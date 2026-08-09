@@ -263,6 +263,37 @@ Measured against Claude Code **2.1.226** — a later build than the 2.1.223 the 
 
 Untested and worth knowing before relying on this: whether `at_mentioned` is accepted while the prompt already holds text the user is typing, and whether the mention survives if the user never submits it.
 
+### The selection chip counts lines from `text`, not from `selection`
+
+Measured 2026-08-09 against 2.1.226, by publishing a `claude-editor-selection`
+straight at a live sidecar that an interactive session had already adopted —
+no editor involved, so `text` was the only variable.
+
+| `selection_changed` params | chip |
+| --- | --- |
+| range filled in, `isEmpty: false`, `text: ""` | `In CLAUDE.md` |
+| the same range with the selected lines in `text` | `N lines selected` |
+
+The frame with the empty `text` was **accepted, not rejected** — it drew the
+plain file chip, exactly what an empty selection draws. So `selection` alone
+cannot produce a line count, and an IDE that declines to send contents cannot
+have that display. This is the measurement behind clause I10, and behind the
+one place in this project where `text` is not `""`.
+
+**The chip is the smaller half of what `text` does.** Measured the same day
+against a real session: with the contents present, the agent's context receives
+
+```
+The user selected the lines 7 to 14 from <path>:
+<the selected lines, verbatim>
+```
+
+where an empty `text` produces only `The user opened the file <path> in the
+IDE.` So `text` is not a display detail — **it puts the selected lines in front
+of the agent with no submission and no `@` mention**, which is a larger promise
+than "drives a line count" and is why I10 spells the consequence out rather than
+leaving it to be discovered.
+
 ### A mention delivers contents; a selection delivers only a path
 
 Measured end to end on 2026-08-08 against the real sidecar and a real `/ide` session: marking two files in yazi and pressing the keybinding put `@tsconfig.json @package.json` in the prompt, and **submitting it made the CLI read both files into the context**.
