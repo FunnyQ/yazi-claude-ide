@@ -11,3 +11,6 @@ dev/PLAN.md
 # the inlined contract copy the executors read. Scaffolding, not product.
 # Anchored: an unanchored `docs/` also swallows dev/docs/, which is published.
 /docs/
+
+# Harness runtime: CLAUDE_CONFIG_DIR for the manual yazi, written on every run.
+/dev/manual/run/
