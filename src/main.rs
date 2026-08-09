@@ -70,6 +70,7 @@ async fn main() -> std::io::Result<()> {
     let hover_sidecar = Arc::clone(&sidecar);
     let marked_sidecar = Arc::clone(&sidecar);
     let range_sidecar = Arc::clone(&sidecar);
+    let editor_selection_sidecar = Arc::clone(&sidecar);
     let cd_sidecar = Arc::clone(&sidecar);
     let cd_state = Arc::clone(&state);
     let cd_dir = dir.clone();
@@ -89,6 +90,11 @@ async fn main() -> std::io::Result<()> {
                 // UI cannot report anything either.
                 eprintln!("yazi-claude-ide: range {url} L{start}-{end}");
                 range_sidecar.mention_range(url, start, end);
+            }),
+            on_editor_selection: Box::new(move |url, start, end, text| {
+                // Not logged like the two above: a live selection fires on every
+                // drag, and one line per keystroke would bury the log.
+                editor_selection_sidecar.set_editor_selection(url, start, end, text);
             }),
             on_cd: Box::new(move |url| {
                 let folders = {

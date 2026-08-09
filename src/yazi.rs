@@ -9,12 +9,17 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 /// The kind the plugin publishes the marked set under (H2, H3).
 pub const MARKED_KIND: &str = "claude-marked";
 
-/// The kind the editor publishes a line range under (I2).
+/// The kind the editor publishes a range mention under (I2).
 pub const SELECTION_KIND: &str = "claude-selection";
 
+/// The kind the editor publishes its live selection under (I9). Separate from
+/// `SELECTION_KIND` because a mention accumulates and a selection replaces.
+pub const EDITOR_SELECTION_KIND: &str = "claude-editor-selection";
+
 /// `claude-marked` is ours because yazi has no event for marked-set changes (H1);
-/// `claude-selection` is ours because the editor is not a yazi event source at all.
-pub const KINDS: &str = "hover,cd,claude-marked,claude-selection";
+/// the two `claude-*selection` kinds are ours because the editor is not a yazi
+/// event source at all.
+pub const KINDS: &str = "hover,cd,claude-marked,claude-selection,claude-editor-selection";
 
 /// Each liveness probe costs about 7ms.
 pub const POLL_MS: u64 = 2_000;
@@ -40,12 +45,15 @@ pub type UrlFn = Box<dyn Fn(&str) + Send>;
 pub type MarkedFn = Box<dyn Fn(Vec<String>) + Send>;
 /// `(url, line_start, line_end)`, still 1-based as the editor published it (I4).
 pub type RangeFn = Box<dyn Fn(&str, u32, u32) + Send>;
+/// As `RangeFn`, plus the selected text the editor sent — `""` when it sent none.
+pub type EditorSelectionFn = Box<dyn Fn(&str, u32, u32, &str) + Send>;
 
 pub struct StreamHandlers {
     pub on_hover: UrlFn,
     pub on_cd: UrlFn,
     pub on_marked: MarkedFn,
     pub on_range: RangeFn,
+    pub on_editor_selection: EditorSelectionFn,
 }
 
 pub struct Subscription {
@@ -111,7 +119,8 @@ pub fn dispatch(line: &str, yazi_id: &str, handlers: &StreamHandlers) {
     // own, so a range never carries the sender G2 filters on. `yaziId` in the body
     // is what ties it to this instance, and I2's broadcast means every other
     // sidecar on the machine is reading this same line (I3).
-    if event.kind == SELECTION_KIND {
+    let from_editor = event.kind == SELECTION_KIND || event.kind == EDITOR_SELECTION_KIND;
+    if from_editor {
         let claimed = match event.body.get("yaziId") {
             Some(Value::String(id)) => id.clone(),
             Some(Value::Number(id)) => id.to_string(),
@@ -120,8 +129,16 @@ pub fn dispatch(line: &str, yazi_id: &str, handlers: &StreamHandlers) {
         if claimed != yazi_id {
             return;
         }
-        if let Some((url, start, end)) = range_of(&event.body) {
+        let Some((url, start, end)) = range_of(&event.body) else {
+            return;
+        };
+        if event.kind == SELECTION_KIND {
             (handlers.on_range)(url, start, end);
+        } else {
+            // Absent text is not malformed (I9): an editor may omit it on a huge
+            // selection, and the range is still worth pushing.
+            let text = event.body.get("text").and_then(Value::as_str).unwrap_or("");
+            (handlers.on_editor_selection)(url, start, end, text);
         }
         return;
     }
@@ -360,6 +377,7 @@ mod tests {
             on_cd: Box::new(move |url| cd.lock().unwrap().push(url.to_string())),
             on_marked: Box::new(move |urls| marked.lock().unwrap().push(urls)),
             on_range: Box::new(|_, _, _| {}),
+            on_editor_selection: Box::new(|_, _, _, _| {}),
         }
     }
 
@@ -398,7 +416,23 @@ mod tests {
         (ranges, handlers)
     }
 
+    /// Handlers wired so only the live-selection sink is observable.
+    fn editor_selection_probe() -> (Selections, StreamHandlers) {
+        let ranges: Selections = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&ranges);
+        let handlers = StreamHandlers {
+            on_editor_selection: Box::new(move |url, start, end, text| {
+                sink.lock()
+                    .unwrap()
+                    .push((url.to_string(), start, end, text.to_string()))
+            }),
+            ..handlers(calls(), calls(), marks())
+        };
+        (ranges, handlers)
+    }
+
     type Ranges = Arc<Mutex<Vec<(String, u32, u32)>>>;
+    type Selections = Arc<Mutex<Vec<(String, u32, u32, String)>>>;
 
     /// A `claude-selection` line as `ya pub-to 0` really writes it: `sender` is
     /// the publishing `ya`'s own id, never the yazi the editor belongs to (I3).
@@ -414,6 +448,76 @@ mod tests {
     #[test]
     fn i2_kinds_contains_selection_kind() {
         assert!(KINDS.split(',').any(|kind| kind == SELECTION_KIND));
+    }
+
+    #[test]
+    fn i9_kinds_contains_editor_selection_kind() {
+        assert!(KINDS.split(',').any(|kind| kind == EDITOR_SELECTION_KIND));
+    }
+
+    #[test]
+    fn i9_a_live_selection_reaches_its_own_handler() {
+        let (ranges, handlers) = editor_selection_probe();
+        dispatch(
+            r#"claude-editor-selection,0,some-other-ya,{"yaziId":"ours","url":"/tmp/one.txt","lineStart":10,"lineEnd":20,"text":"one\ntwo"}"#,
+            "ours",
+            &handlers,
+        );
+        assert_eq!(
+            *ranges.lock().unwrap(),
+            [("/tmp/one.txt".to_owned(), 10, 20, "one\ntwo".to_owned())]
+        );
+    }
+
+    #[test]
+    fn i9_a_live_selection_without_text_is_still_delivered() {
+        // I9 lets an editor omit `text` on a selection too big to be worth
+        // sending. That is a range without a line count, not a malformed body.
+        let (ranges, handlers) = editor_selection_probe();
+        dispatch(
+            r#"claude-editor-selection,0,some-other-ya,{"yaziId":"ours","url":"/tmp/one.txt","lineStart":10,"lineEnd":20}"#,
+            "ours",
+            &handlers,
+        );
+        assert_eq!(
+            *ranges.lock().unwrap(),
+            [("/tmp/one.txt".to_owned(), 10, 20, String::new())]
+        );
+    }
+
+    #[test]
+    fn i9_a_live_selection_is_not_a_mention() {
+        // The two kinds share every validation rule and nothing else. Crossing
+        // them would turn a drag into a prompt full of mentions.
+        let (mentions, handlers) = range_probe();
+        dispatch(
+            r#"claude-editor-selection,0,some-other-ya,{"yaziId":"ours","url":"/tmp/one.txt","lineStart":1,"lineEnd":2}"#,
+            "ours",
+            &handlers,
+        );
+        assert!(mentions.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn i9_a_live_selection_for_another_yazi_is_ignored() {
+        let (ranges, handlers) = editor_selection_probe();
+        dispatch(
+            r#"claude-editor-selection,0,some-other-ya,{"yaziId":"theirs","url":"/tmp/one.txt","lineStart":10,"lineEnd":20}"#,
+            "ours",
+            &handlers,
+        );
+        assert!(ranges.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn i9_a_malformed_live_selection_is_dropped() {
+        let (ranges, handlers) = editor_selection_probe();
+        dispatch(
+            r#"claude-editor-selection,0,some-other-ya,{"yaziId":"ours","url":"/tmp/one.txt","lineStart":20,"lineEnd":10}"#,
+            "ours",
+            &handlers,
+        );
+        assert!(ranges.lock().unwrap().is_empty());
     }
 
     #[test]

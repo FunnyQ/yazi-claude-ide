@@ -10,7 +10,7 @@ use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Response}
 use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::tungstenite::{Message, Utf8Bytes};
 
-use crate::tools::{self, SelectionPayload, ToolContext};
+use crate::tools::{self, Position, Selection, SelectionPayload, ToolContext};
 
 pub struct StartOptions {
     pub workspace_folders: Box<dyn Fn() -> Vec<String> + Send + Sync>,
@@ -133,6 +133,47 @@ impl Sidecar {
         })
         .to_string();
         self.inner.broadcast(frame);
+    }
+
+    /// I10. The editor's live selection, 1-based and inclusive as it published it.
+    /// `text` is the editor's own buffer contents — the sidecar never reads a file
+    /// to fill it (C4), and `""` is what an editor that omitted it gets.
+    pub fn set_editor_selection(
+        &self,
+        file_path: &str,
+        line_start: u32,
+        line_end: u32,
+        text: &str,
+    ) {
+        if !tools::is_file(file_path) {
+            return;
+        }
+        // No dedupe (I11): dragging a selection sends range after range for one
+        // unchanged path, and D6's path-keyed check would swallow all but the first.
+        let frame = json!({
+            "jsonrpc": "2.0",
+            "method": "selection_changed",
+            "params": {
+                "text": text,
+                "filePath": file_path,
+                "fileUrl": format!("file://{file_path}"),
+                "selection": Selection {
+                    start: Position { line: line_start.saturating_sub(1), character: 0 },
+                    end: Position { line: line_end.saturating_sub(1), character: 0 },
+                    is_empty: false,
+                },
+            },
+        })
+        .to_string();
+        if !self.inner.broadcast(frame) {
+            return;
+        }
+        // I12. The CLI now displays a range, and D6 would keep the next hover onto
+        // this same file silent — leaving that range on screen after the user has
+        // left it. Forgetting the path is what makes that hover speak again.
+        if let Ok(mut state) = self.inner.state.lock() {
+            state.last_pushed = None;
+        }
     }
 
     /// Idempotent — stopping twice is not an error.
