@@ -39,9 +39,23 @@ pub struct DdsEvent {
 
 pub type UrlFn = Box<dyn Fn(&str) + Send>;
 pub type MarkedFn = Box<dyn Fn(Vec<String>) + Send>;
-/// `(url, line_start, line_end, text)`. The lines are still 1-based as the editor
-/// published them (I4), and `text` is `""` when the editor sent none (I6).
-pub type EditorSelectionFn = Box<dyn Fn(&str, u32, u32, &str) + Send>;
+/// What the editor published, before any conversion. Lines are 1-based and
+/// inclusive; characters are 0-based with an exclusive end. They differ on
+/// purpose — see I4 before changing either.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditorSelection {
+    pub url: String,
+    pub line_start: u32,
+    pub line_end: u32,
+    pub char_start: u32,
+    pub char_end: u32,
+    pub text: String,
+}
+
+/// Owned rather than borrowed, unlike the hover path: a live selection is
+/// debounced by the editor, so this runs a few times per drag rather than once
+/// per keystroke, and the clarity is worth two allocations.
+pub type EditorSelectionFn = Box<dyn Fn(EditorSelection) + Send>;
 
 pub struct StreamHandlers {
     pub on_hover: UrlFn,
@@ -89,19 +103,42 @@ pub fn parse_event(line: &str) -> Option<DdsEvent> {
     })
 }
 
-/// The line the editor published, or `None` for anything I6 says to drop whole.
-fn range_of(body: &Map<String, Value>) -> Option<(&str, u32, u32)> {
-    let line = |key| {
-        u32::try_from(body.get(key).and_then(Value::as_u64)?)
-            .ok()
-            .filter(|line| *line >= 1)
+/// What the editor published, or `None` for anything I6 says to drop whole.
+fn selection_of(body: &Map<String, Value>) -> Option<EditorSelection> {
+    let number = |key| u32::try_from(body.get(key).and_then(Value::as_u64)?).ok();
+    // Absent is not malformed for the character pair (I4, I6); present-but-junk is.
+    let character = |key| match body.get(key) {
+        None => Some(0),
+        Some(_) => number(key),
     };
+
     let url = body
         .get("url")
         .and_then(Value::as_str)
         .filter(|url| !url.is_empty())?;
-    let (start, end) = (line("lineStart")?, line("lineEnd")?);
-    (start <= end).then_some((url, start, end))
+    let (line_start, line_end) = (number("lineStart")?, number("lineEnd")?);
+    if line_start < 1 || line_start > line_end {
+        return None;
+    }
+    let (char_start, char_end) = (character("charStart")?, character("charEnd")?);
+    // Reversed only means reversed on one line; across lines the end column is
+    // routinely smaller than the start column.
+    if line_start == line_end && char_start > char_end {
+        return None;
+    }
+
+    Some(EditorSelection {
+        url: url.to_owned(),
+        line_start,
+        line_end,
+        char_start,
+        char_end,
+        text: body
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+    })
 }
 
 pub fn dispatch(line: &str, yazi_id: &str, handlers: &StreamHandlers) {
@@ -122,13 +159,10 @@ pub fn dispatch(line: &str, yazi_id: &str, handlers: &StreamHandlers) {
         if claimed != yazi_id {
             return;
         }
-        let Some((url, start, end)) = range_of(&event.body) else {
+        let Some(selection) = selection_of(&event.body) else {
             return;
         };
-        // Absent text is not malformed (I6): an editor may omit it on a huge
-        // selection, and the range is still worth pushing.
-        let text = event.body.get("text").and_then(Value::as_str).unwrap_or("");
-        (handlers.on_editor_selection)(url, start, end, text);
+        (handlers.on_editor_selection)(selection);
         return;
     }
 
@@ -365,7 +399,7 @@ mod tests {
             on_hover: Box::new(move |url| hover.lock().unwrap().push(url.to_string())),
             on_cd: Box::new(move |url| cd.lock().unwrap().push(url.to_string())),
             on_marked: Box::new(move |urls| marked.lock().unwrap().push(urls)),
-            on_editor_selection: Box::new(|_, _, _, _| {}),
+            on_editor_selection: Box::new(|_| {}),
         }
     }
 
@@ -393,20 +427,27 @@ mod tests {
 
     /// Handlers wired so only the live-selection sink is observable.
     fn editor_selection_probe() -> (Selections, StreamHandlers) {
-        let ranges: Selections = Arc::new(Mutex::new(Vec::new()));
-        let sink = Arc::clone(&ranges);
+        let selections: Selections = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&selections);
         let handlers = StreamHandlers {
-            on_editor_selection: Box::new(move |url, start, end, text| {
-                sink.lock()
-                    .unwrap()
-                    .push((url.to_string(), start, end, text.to_string()))
-            }),
+            on_editor_selection: Box::new(move |selection| sink.lock().unwrap().push(selection)),
             ..handlers(calls(), calls(), marks())
         };
-        (ranges, handlers)
+        (selections, handlers)
     }
 
-    type Selections = Arc<Mutex<Vec<(String, u32, u32, String)>>>;
+    type Selections = Arc<Mutex<Vec<EditorSelection>>>;
+
+    fn selection(url: &str, lines: (u32, u32), chars: (u32, u32), text: &str) -> EditorSelection {
+        EditorSelection {
+            url: url.to_owned(),
+            line_start: lines.0,
+            line_end: lines.1,
+            char_start: chars.0,
+            char_end: chars.1,
+            text: text.to_owned(),
+        }
+    }
 
     #[test]
     fn h3_kinds_contains_marked_kind() {
@@ -438,7 +479,7 @@ mod tests {
         );
         assert_eq!(
             *selections.lock().unwrap(),
-            [("/tmp/one.txt".to_owned(), 10, 20, "one\ntwo".to_owned())]
+            [selection("/tmp/one.txt", (10, 20), (0, 0), "one\ntwo")]
         );
     }
 
@@ -493,8 +534,84 @@ mod tests {
         );
         assert_eq!(
             *selections.lock().unwrap(),
-            [("/tmp/one.txt".to_owned(), 10, 20, String::new())]
+            [selection("/tmp/one.txt", (10, 20), (0, 0), "")]
         );
+    }
+
+    #[test]
+    fn i4_characters_travel_untouched() {
+        // Lines are 1-based and converted downstream; characters are already
+        // 0-based with an exclusive end and must not be adjusted anywhere.
+        let (selections, handlers) = editor_selection_probe();
+        dispatch(
+            &selection_line(
+                "\"ours\"",
+                r#""url":"/tmp/one.txt","lineStart":5,"lineEnd":10,"charStart":4,"charEnd":37"#,
+            ),
+            "ours",
+            &handlers,
+        );
+        assert_eq!(
+            *selections.lock().unwrap(),
+            [selection("/tmp/one.txt", (5, 10), (4, 37), "")]
+        );
+    }
+
+    #[test]
+    fn i6_a_reversed_selection_on_one_line_is_dropped() {
+        let (selections, handlers) = editor_selection_probe();
+        dispatch(
+            &selection_line(
+                "\"ours\"",
+                r#""url":"/tmp/one.txt","lineStart":5,"lineEnd":5,"charStart":9,"charEnd":2"#,
+            ),
+            "ours",
+            &handlers,
+        );
+        assert!(selections.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn i6_a_smaller_end_column_across_lines_is_kept() {
+        // Ordinary: line 5 column 40 down to line 9 column 2 is a real selection.
+        let (selections, handlers) = editor_selection_probe();
+        dispatch(
+            &selection_line(
+                "\"ours\"",
+                r#""url":"/tmp/one.txt","lineStart":5,"lineEnd":9,"charStart":40,"charEnd":2"#,
+            ),
+            "ours",
+            &handlers,
+        );
+        assert_eq!(selections.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn i6_a_non_numeric_character_is_dropped() {
+        let (selections, handlers) = editor_selection_probe();
+        dispatch(
+            &selection_line(
+                "\"ours\"",
+                r#""url":"/tmp/one.txt","lineStart":5,"lineEnd":10,"charStart":"4","charEnd":37"#,
+            ),
+            "ours",
+            &handlers,
+        );
+        assert!(selections.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn i6_a_negative_character_is_dropped() {
+        let (selections, handlers) = editor_selection_probe();
+        dispatch(
+            &selection_line(
+                "\"ours\"",
+                r#""url":"/tmp/one.txt","lineStart":5,"lineEnd":10,"charStart":0,"charEnd":-1"#,
+            ),
+            "ours",
+            &handlers,
+        );
+        assert!(selections.lock().unwrap().is_empty());
     }
 
     #[test]

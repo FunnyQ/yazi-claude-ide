@@ -114,14 +114,15 @@ impl Sidecar {
         }
     }
 
-    /// I5. The editor's live selection, 1-based and inclusive as it published it.
-    /// `text` is the editor's own buffer contents — the sidecar never reads a file
-    /// to fill it (C4), and `""` is what an editor that omitted it gets.
+    /// I5. `lines` is 1-based and inclusive as the editor counts them; `chars` is
+    /// already 0-based with an exclusive end and passes straight through. The two
+    /// conventions differ on purpose — I4 says why. `text` is the editor's own
+    /// buffer contents; the sidecar never reads a file to fill it (C4).
     pub fn set_editor_selection(
         &self,
         file_path: &str,
-        line_start: u32,
-        line_end: u32,
+        lines: (u32, u32),
+        chars: (u32, u32),
         text: &str,
     ) {
         if !tools::is_file(file_path) {
@@ -137,8 +138,8 @@ impl Sidecar {
                 "filePath": file_path,
                 "fileUrl": format!("file://{file_path}"),
                 "selection": Selection {
-                    start: Position { line: line_start.saturating_sub(1), character: 0 },
-                    end: Position { line: line_end.saturating_sub(1), character: 0 },
+                    start: Position { line: lines.0.saturating_sub(1), character: chars.0 },
+                    end: Position { line: lines.1.saturating_sub(1), character: chars.1 },
                     is_empty: false,
                 },
             },

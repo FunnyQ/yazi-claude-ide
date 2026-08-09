@@ -83,13 +83,21 @@ async fn main() -> std::io::Result<()> {
                 eprintln!("yazi-claude-ide: marked {} file(s)", urls.len());
                 marked_sidecar.mention(&urls);
             }),
-            on_editor_selection: Box::new(move |url, start, end, text| {
+            on_editor_selection: Box::new(move |selection| {
                 // I10. The range, never the text — this log lands in /tmp, and the
                 // text is the contents of the user's file. It is also the only
                 // observable this channel has: no yazi UI, behind a block opener,
                 // and its whole failure mode is silence.
-                eprintln!("yazi-claude-ide: selection {url} L{start}-{end}");
-                editor_selection_sidecar.set_editor_selection(url, start, end, text);
+                eprintln!(
+                    "yazi-claude-ide: selection {} L{}-{}",
+                    selection.url, selection.line_start, selection.line_end
+                );
+                editor_selection_sidecar.set_editor_selection(
+                    &selection.url,
+                    (selection.line_start, selection.line_end),
+                    (selection.char_start, selection.char_end),
+                    &selection.text,
+                );
             }),
             on_cd: Box::new(move |url| {
                 let folders = {
