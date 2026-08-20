@@ -2,8 +2,11 @@ mod common;
 
 use common::{Client, assert_unauthorized, fixture};
 use serde_json::{Value, json};
+use std::fs;
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use yazi_claude_ide::server::Sidecar;
+use yazi_claude_ide::server::{DiffLaunch, Sidecar};
 
 const TOKEN: &str = "rpc-test-token";
 
@@ -242,4 +245,99 @@ async fn stop_closes_an_already_open_connection() {
         client.closed(Duration::from_secs(2)).await,
         "stop() must close connections already accepted, not just the listener"
     );
+}
+
+/// The stand-in for main.rs's `launch_diff`: writes the copy where J5 will read
+/// it back, and hands the token out so the test can play the part of J4.
+fn viewer(
+    token_out: Arc<Mutex<Option<String>>>,
+    dir: PathBuf,
+) -> Box<dyn Fn(DiffLaunch<'_>) -> Option<PathBuf> + Send + Sync> {
+    Box::new(move |launch| {
+        let copy = dir.join("target.txt");
+        fs::create_dir_all(&dir).ok()?;
+        fs::write(&copy, launch.new_contents).ok()?;
+        *token_out.lock().unwrap() = Some(launch.token.to_owned());
+        Some(copy)
+    })
+}
+
+fn open_diff_request(id: i64, old_path: &str) -> String {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "tools/call",
+        "params": {
+            "name": "openDiff",
+            "arguments": {
+                "old_file_path": old_path,
+                "new_file_path": old_path,
+                "new_file_contents": "one\nTWO\n",
+                "tab_name": "✻ [Claude Code] target.txt (5c8bea) ⧉",
+            },
+        },
+    })
+    .to_string()
+}
+
+#[tokio::test]
+async fn f5_j7_open_diff_without_a_viewer_is_refused() {
+    let sidecar = common::sidecar(TOKEN, vec![]).await;
+    let mut client = Client::connect(&sidecar, TOKEN).await.unwrap();
+
+    client.raw(&open_diff_request(1, "/tmp/target.txt"));
+    let response = client.next(Duration::from_secs(2)).await.unwrap();
+
+    assert_eq!(response["error"]["code"], -32601);
+}
+
+#[tokio::test]
+async fn j5_j6_a_held_diff_answers_file_saved_with_the_file_as_it_stands() {
+    let token_out = Arc::new(Mutex::new(None));
+    let dir = std::env::temp_dir().join(format!("yci-j5-{}", std::process::id()));
+    let sidecar =
+        common::sidecar_with_diff(TOKEN, vec![], viewer(Arc::clone(&token_out), dir.clone())).await;
+    let mut client = Client::connect(&sidecar, TOKEN).await.unwrap();
+
+    client.raw(&open_diff_request(7, "/tmp/target.txt"));
+
+    // J6. Nothing is owed while the viewer is up — no verdict, and above all not
+    // the DIFF_ACCEPTED that would assert an approval nobody gave.
+    assert!(client.silence(Duration::from_millis(300)).await.is_none());
+
+    // The user amends the copy, which is the whole point of J5.
+    let copy = dir.join("target.txt");
+    assert_eq!(fs::read_to_string(&copy).unwrap(), "one\nTWO\n");
+    fs::write(&copy, "one\nTWO\namended\n").unwrap();
+
+    let token = token_out.lock().unwrap().clone().expect("viewer ran");
+    sidecar.finish_diff(&token);
+
+    let response = client.next(Duration::from_secs(2)).await.unwrap();
+    assert_eq!(response["id"], 7);
+    assert_eq!(response["result"]["content"][0]["text"], "FILE_SAVED");
+    assert_eq!(
+        response["result"]["content"][1]["text"],
+        "one\nTWO\namended\n"
+    );
+    // J5 again: the copy is the user's file in all but name and does not outlive
+    // the answer.
+    assert!(!dir.exists());
+}
+
+#[tokio::test]
+async fn j4_an_unknown_token_is_dropped() {
+    let token_out = Arc::new(Mutex::new(None));
+    let dir = std::env::temp_dir().join(format!("yci-j4-{}", std::process::id()));
+    let sidecar =
+        common::sidecar_with_diff(TOKEN, vec![], viewer(Arc::clone(&token_out), dir.clone())).await;
+    let mut client = Client::connect(&sidecar, TOKEN).await.unwrap();
+
+    client.raw(&open_diff_request(8, "/tmp/target.txt"));
+    assert!(client.silence(Duration::from_millis(200)).await.is_none());
+
+    sidecar.finish_diff("not-a-token-this-sidecar-issued");
+
+    assert!(client.silence(Duration::from_millis(300)).await.is_none());
+    let _ = fs::remove_dir_all(&dir);
 }

@@ -1,6 +1,7 @@
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Map, Value, json};
 use std::io;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::net::TcpListener;
@@ -10,12 +11,32 @@ use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Response}
 use tokio_tungstenite::tungstenite::http::StatusCode;
 use tokio_tungstenite::tungstenite::{Message, Utf8Bytes};
 
-use crate::tools::{self, Position, Selection, SelectionPayload, ToolContext};
+use crate::tools::{self, DiffRequest, Position, Selection, SelectionPayload, ToolContext};
 
 pub struct StartOptions {
     pub workspace_folders: Box<dyn Fn() -> Vec<String> + Send + Sync>,
     pub reveal: Box<dyn Fn(&str) + Send + Sync>,
+    /// J1-J3. Returns the path whose contents J5 reads back, or `None` when no
+    /// viewer is configured or the launch failed (J7). Everything on disk and
+    /// everything about yazi lives behind this closure; the server owns only the
+    /// token, the held request, and the answer.
+    pub open_diff: Box<dyn Fn(DiffLaunch<'_>) -> Option<PathBuf> + Send + Sync>,
     pub auth_token: String,
+}
+
+/// What the viewer needs to exist, handed to the closure above.
+pub struct DiffLaunch<'a> {
+    pub token: &'a str,
+    pub old_path: &'a str,
+    pub new_contents: &'a str,
+}
+
+/// An `openDiff` whose viewer is up, waiting for J4 to name its token.
+struct PendingDiff {
+    token: String,
+    rpc_id: Value,
+    connection: u64,
+    new_path: PathBuf,
 }
 
 /// One open WebSocket, addressed by an unbounded queue.
@@ -34,6 +55,7 @@ struct State {
     hovered: Option<String>,
     last_pushed: Option<String>,
     clients: Vec<Connection>,
+    pending_diffs: Vec<PendingDiff>,
 }
 
 struct Inner {
@@ -42,6 +64,7 @@ struct Inner {
     state: Mutex<State>,
     workspace_folders: Box<dyn Fn() -> Vec<String> + Send + Sync>,
     reveal: Box<dyn Fn(&str) + Send + Sync>,
+    open_diff: Box<dyn Fn(DiffLaunch<'_>) -> Option<PathBuf> + Send + Sync>,
     next_connection_id: AtomicU64,
     shutdown: Mutex<Option<oneshot::Sender<()>>>,
 }
@@ -164,6 +187,50 @@ impl Sidecar {
     }
 
     /// Idempotent — stopping twice is not an error.
+    /// J5. The viewer for `token` has exited: answer its held `openDiff` with the
+    /// file as it now stands, then take the copy off disk. An unknown token is
+    /// dropped (J4), and so is a connection that closed while the user read (J7).
+    pub fn finish_diff(&self, token: &str) {
+        let Ok(mut state) = self.inner.state.lock() else {
+            return;
+        };
+        let Some(index) = state
+            .pending_diffs
+            .iter()
+            .position(|pending| pending.token == token)
+        else {
+            return;
+        };
+        let pending = state.pending_diffs.remove(index);
+        let frames = state
+            .clients
+            .iter()
+            .find(|client| client.id == pending.connection)
+            .map(|client| client.frames.clone());
+        drop(state);
+
+        // Whatever the user left behind, including nothing: a viewer that only
+        // displays leaves the sidecar's copy exactly as it was written (J1).
+        let contents = std::fs::read_to_string(&pending.new_path).unwrap_or_default();
+        discard_diff_copy(&pending.new_path);
+        let Some(frames) = frames else {
+            return;
+        };
+        let _ = frames.send(
+            json!({
+                "jsonrpc": "2.0",
+                "id": pending.rpc_id,
+                "result": {
+                    "content": [
+                        { "type": "text", "text": "FILE_SAVED" },
+                        { "type": "text", "text": contents },
+                    ],
+                },
+            })
+            .to_string(),
+        );
+    }
+
     pub fn stop(&self) {
         let sender = self
             .inner
@@ -275,6 +342,35 @@ impl ToolContext for Inner {
     fn reveal(&self, file_path: &str) {
         (self.reveal)(file_path);
     }
+
+    fn open_diff(&self, connection: u64, rpc_id: &Value, request: DiffRequest<'_>) -> bool {
+        // J4's completion rides a machine-wide broadcast, so the token has to be
+        // unguessable: anyone who can name it can finish someone else's diff with
+        // bytes of their choosing.
+        let token = crate::lock::new_auth_token();
+        let Some(new_path) = (self.open_diff)(DiffLaunch {
+            token: &token,
+            old_path: request.old_path,
+            new_contents: request.new_contents,
+        }) else {
+            return false;
+        };
+        // J8. The path and the tab, never the contents — this log lands in /tmp.
+        eprintln!(
+            "yazi-claude-ide: diff {} ({})",
+            request.old_path, request.tab_name
+        );
+        let Ok(mut state) = self.state.lock() else {
+            return false;
+        };
+        state.pending_diffs.push(PendingDiff {
+            token,
+            rpc_id: rpc_id.clone(),
+            connection,
+            new_path,
+        });
+        true
+    }
 }
 
 // tungstenite requires the auth callback to return a full HTTP rejection response.
@@ -291,9 +387,11 @@ pub async fn start_sidecar(opts: StartOptions) -> io::Result<Sidecar> {
             hovered: None,
             last_pushed: None,
             clients: Vec::new(),
+            pending_diffs: Vec::new(),
         }),
         workspace_folders: opts.workspace_folders,
         reveal: opts.reveal,
+        open_diff: opts.open_diff,
         next_connection_id: AtomicU64::new(0),
         shutdown: Mutex::new(Some(shutdown_sender)),
     });
@@ -383,7 +481,7 @@ where
             incoming = reader.next() => {
                 match incoming {
                     Some(Ok(Message::Text(text))) => {
-                        if let Some(response) = handle_json_rpc(text.as_str(), inner.as_ref())
+                        if let Some(response) = handle_json_rpc(text.as_str(), inner.as_ref(), id)
                             && writer.send(Message::Text(response.into())).await.is_err()
                         {
                             break;
@@ -413,9 +511,33 @@ where
     close_connection(&inner, id);
 }
 
+/// J5. The launcher makes one directory per request and puts nothing in it but
+/// this copy and the script yazi ran, so the directory goes with the copy.
+/// Failures are ignored: a file left in the temp directory is not worth an error
+/// path (J7).
+fn discard_diff_copy(new_path: &std::path::Path) {
+    match new_path.parent() {
+        Some(dir) => {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+        None => {
+            let _ = std::fs::remove_file(new_path);
+        }
+    }
+}
+
 fn close_connection(inner: &Inner, id: u64) {
     if let Ok(mut state) = inner.state.lock() {
         state.clients.retain(|client| client.id != id);
+        // J7. Nobody is left to answer, and the viewer may well still be up; the
+        // publish that follows it will find no pending entry and stop there.
+        let orphaned: Vec<_> = state
+            .pending_diffs
+            .extract_if(.., |pending| pending.connection == id)
+            .collect();
+        for pending in &orphaned {
+            discard_diff_copy(&pending.new_path);
+        }
         if state.clients.is_empty() {
             // The next connection is owed D3 again — one push of the then-current
             // file. Clearing `last_pushed` ensures the next connection sees its D3
@@ -425,7 +547,7 @@ fn close_connection(inner: &Inner, id: u64) {
     }
 }
 
-fn handle_json_rpc(frame: &str, ctx: &dyn ToolContext) -> Option<String> {
+fn handle_json_rpc(frame: &str, ctx: &dyn ToolContext, connection: u64) -> Option<String> {
     let parsed: Value = match serde_json::from_str(frame) {
         Ok(value) => value,
         Err(_) => {
@@ -467,6 +589,31 @@ fn handle_json_rpc(frame: &str, ctx: &dyn ToolContext) -> Option<String> {
                 .and_then(Value::as_object)
                 .cloned()
                 .unwrap_or_else(Map::new);
+            // J1. openDiff is the one tool answered out of band, so it gets first
+            // refusal: a launched viewer holds the request until J5, and anything
+            // else falls through to call_tool's -32601 (F5, J7).
+            if name == "openDiff" {
+                let argument = |key| {
+                    arguments
+                        .get(key)
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                };
+                let old_path = argument("old_file_path");
+                if !old_path.is_empty()
+                    && ctx.open_diff(
+                        connection,
+                        &id,
+                        DiffRequest {
+                            old_path,
+                            new_contents: argument("new_file_contents"),
+                            tab_name: argument("tab_name"),
+                        },
+                    )
+                {
+                    return None;
+                }
+            }
             match tools::call_tool(name, &arguments, ctx) {
                 Some(result) => success(id, json!(result)),
                 None => failure(id, format!("Tool not found: {name}")),

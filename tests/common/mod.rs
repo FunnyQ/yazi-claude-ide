@@ -12,7 +12,7 @@ use tokio::time::error::Elapsed;
 use tokio::time::timeout;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::{Error as ConnectError, Message};
-use yazi_claude_ide::server::{Sidecar, StartOptions, start_sidecar};
+use yazi_claude_ide::server::{DiffLaunch, Sidecar, StartOptions, start_sidecar};
 
 /// A path inside the crate root, used as a file that is certain to stat.
 pub fn fixture(name: &str) -> String {
@@ -26,6 +26,26 @@ pub async fn sidecar(token: &str, folders: Vec<String>) -> Sidecar {
     start_sidecar(StartOptions {
         workspace_folders: Box::new(move || folders.clone()),
         reveal: Box::new(|_| {}),
+        // No viewer: every openDiff in these tests takes F5's -32601 path.
+        open_diff: Box::new(|_| None),
+        auth_token: token.to_owned(),
+    })
+    .await
+    .expect("test sidecar should start")
+}
+
+/// A sidecar whose viewer is the closure, standing in for the one main.rs wires
+/// to yazi (J1). The closure writes the copy the way the real launcher does, so
+/// a test can amend it and watch J5 read it back.
+pub async fn sidecar_with_diff(
+    token: &str,
+    folders: Vec<String>,
+    open_diff: Box<dyn Fn(DiffLaunch<'_>) -> Option<PathBuf> + Send + Sync>,
+) -> Sidecar {
+    start_sidecar(StartOptions {
+        workspace_folders: Box::new(move || folders.clone()),
+        reveal: Box::new(|_| {}),
+        open_diff,
         auth_token: token.to_owned(),
     })
     .await
