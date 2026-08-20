@@ -1,13 +1,67 @@
+use std::ffi::OsStr;
+use std::fs;
+use std::io::Write;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use yazi_claude_ide::lock::{self, LockFile};
-use yazi_claude_ide::server::{StartOptions, start_sidecar};
+use yazi_claude_ide::server::{DiffLaunch, StartOptions, start_sidecar};
 use yazi_claude_ide::yazi::{self, LivenessOptions, StreamHandlers};
 
 struct Folders {
     anchor: String,
     anchored: bool,
     folders: Vec<String>,
+}
+
+/// J2. The copy and the script are the user's file in all but name.
+fn write_private(path: &Path, contents: &str) -> Option<()> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(path)
+        .ok()?;
+    file.write_all(contents.as_bytes()).ok()
+}
+
+/// J1-J3. Put the proposed contents where the viewer can open them, write the
+/// script yazi will run, and ask yazi for the terminal. `None` at every failure,
+/// which J7 turns back into `-32601`.
+fn launch_diff(template: &str, yazi_id: &str, launch: DiffLaunch<'_>) -> Option<PathBuf> {
+    let dir = std::env::temp_dir().join(format!("yazi-claude-ide-diff-{}", launch.token));
+    fs::DirBuilder::new().mode(0o700).create(&dir).ok()?;
+
+    // Keep the user's file name: the viewer reads its syntax highlighting off it,
+    // and a diff of `proposed` against `main.rs` is a worse thing to look at.
+    let name = Path::new(launch.old_path)
+        .file_name()
+        .unwrap_or_else(|| OsStr::new("proposed"));
+    let new_path = dir.join(name);
+    let script_path = dir.join("view.sh");
+    let launched = write_private(&new_path, launch.new_contents)
+        .and_then(|()| {
+            write_private(
+                &script_path,
+                &yazi::diff_script(
+                    template,
+                    yazi_id,
+                    launch.token,
+                    launch.old_path,
+                    new_path.to_str()?,
+                ),
+            )
+        })
+        .and_then(|()| yazi::open_diff(yazi_id, script_path.to_str()?).then_some(()));
+
+    match launched {
+        Some(()) => Some(new_path),
+        None => {
+            let _ = fs::remove_dir_all(&dir);
+            None
+        }
+    }
 }
 
 fn folders_of(state: &Mutex<Folders>) -> Vec<String> {
@@ -46,10 +100,19 @@ async fn main() -> std::io::Result<()> {
     let workspace_state = Arc::clone(&state);
     let reveal_yazi_id = yazi_id.clone();
     let auth_token = lock::new_auth_token();
+    // J1. Read once: an opt-in nobody set means section J never runs, and F5's
+    // -32601 is what every openDiff gets.
+    let diff_template = std::env::var("YCI_DIFF_CMD")
+        .ok()
+        .filter(|template| !template.trim().is_empty());
+    let diff_yazi_id = yazi_id.clone();
     let sidecar = Arc::new(
         start_sidecar(StartOptions {
             workspace_folders: Box::new(move || folders_of(&workspace_state)),
             reveal: Box::new(move |path| yazi::reveal(&reveal_yazi_id, path)),
+            open_diff: Box::new(move |launch| {
+                launch_diff(diff_template.as_deref()?, &diff_yazi_id, launch)
+            }),
             auth_token,
         })
         .await?,
@@ -70,6 +133,7 @@ async fn main() -> std::io::Result<()> {
     let hover_sidecar = Arc::clone(&sidecar);
     let marked_sidecar = Arc::clone(&sidecar);
     let editor_selection_sidecar = Arc::clone(&sidecar);
+    let diff_done_sidecar = Arc::clone(&sidecar);
     let cd_sidecar = Arc::clone(&sidecar);
     let cd_state = Arc::clone(&state);
     let cd_dir = dir.clone();
@@ -98,6 +162,12 @@ async fn main() -> std::io::Result<()> {
                     (selection.char_start, selection.char_end),
                     &selection.text,
                 );
+            }),
+            on_diff_done: Box::new(move |token| {
+                // J8 again: the token names which request, and nothing about the
+                // contents the user just read.
+                eprintln!("yazi-claude-ide: diff closed");
+                diff_done_sidecar.finish_diff(&token);
             }),
             on_cd: Box::new(move |url| {
                 let folders = {
