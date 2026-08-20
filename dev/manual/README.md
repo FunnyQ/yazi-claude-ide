@@ -48,6 +48,42 @@ ya emit-to $ID cd "$SB/dir-a"        # cursor entry follows, anchor does not
 ya emit-to $ID reveal "$SB/two.txt"  # hover, and so a selection_changed push
 ```
 
+## The diff viewer (section J)
+
+`verify` does not cover section J: the openDiff has to come from a WebSocket
+client, and this harness is bash. Drive it by hand instead, with
+[`../spike/diff-client.ts`](../spike/diff-client.ts) standing in for Claude.
+
+```sh
+export YCI_DIFF_CMD='nvim -d "$1" "$2"'   # launch forwards it; unset, J never runs
+dev/manual/harness.sh start
+bun dev/spike/diff-client.ts dev/manual/run/ide "$PWD/dev/spike/yazi/sandbox/one.txt" &
+dev/manual/harness.sh pane                # nvim, holding yazi's terminal
+dev/manual/harness.sh key C-w l
+dev/manual/harness.sh key ':2s/TWO/AMENDED/' Enter
+dev/manual/harness.sh key ':wqa' Enter
+```
+
+The client prints the reply. `FILE_SAVED` carrying the amended line is the whole
+of J1-J5: the viewer got the terminal, the user's edit reached the copy, and the
+publish released the held request.
+
+### What this proved (2026-08-20)
+
+- `ya emit-to <id> shell '<cmd>' --block` hands a real terminal to a real nvim,
+  with yazi hidden behind it, when the caller is a double-forked sidecar that has
+  no terminal of its own.
+- The amendment survives the round trip: `one\nTWO\nthree` went out and
+  `one\nAMENDED-BY-THE-USER\nthree` came back, 21 seconds later, with no timeout
+  and no second request.
+- The copy and its directory are gone afterwards, and the user's own file is
+  untouched.
+- The sidecar log carries the path and the tab name and neither side's contents
+  (J8).
+- **`ya pub-to` needs `--json`.** The body is an option, not a positional
+  argument, and a script that omits the flag publishes nothing at all. No unit
+  test can see this — the argv builder was green while the channel was dead.
+
 ## What this proved (2026-08-08)
 
 - The plugin's `setup()` double-forks the sidecar during yazi startup, and it

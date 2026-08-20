@@ -48,7 +48,7 @@ yazi ──ya.sync──► ps.pub_to(0, "claude-marked")        claude-ide.yazi
        ▼
      yazi-claude-ide
        main.rs    YAZI_ID guard · wiring · SIGINT/SIGTERM · shutdown
-       yazi.rs    `ya sub hover,cd,claude-marked,claude-editor-selection` · `ya emit-to reveal` · liveness poll
+       yazi.rs    `ya sub hover,cd,claude-marked,claude-editor-selection,claude-diff-done` · `ya emit-to reveal` · `ya emit-to shell --block` · liveness poll
        lock.rs    <config>/ide/<port>.lock · anchor_for · workspace_folders · reclaim_stale
        server.rs  TcpListener 127.0.0.1:0 · accept_hdr_async · per-connection mpsc
          tools.rs   ADVERTISED · selection_payload · call_tool
@@ -61,10 +61,10 @@ yazi ──ya.sync──► ps.pub_to(0, "claude-marked")        claude-ide.yazi
 | Module | Clauses | Tests |
 | --- | --- | --- |
 | `src/lock.rs` | A, B | `mod tests` in file |
-| `src/tools.rs` | B6, C, E2, F | `mod tests` in file |
-| `src/yazi.rs` | G2, G3, H3, I2, I3, I6 | `mod tests` in file |
-| `src/server.rs` | A5, D, E, I5–I9 | `tests/server_rpc.rs`, `tests/server_push.rs` |
-| `src/main.rs` | A6, B1, B3, G1–G3 | `tests/lifecycle.rs` |
+| `src/tools.rs` | B6, C, E2, F, J1 | `mod tests` in file |
+| `src/yazi.rs` | G2, G3, H3, I2, I3, I6, J3, J4 | `mod tests` in file |
+| `src/server.rs` | A5, D, E, I5–I9, J5–J8 | `tests/server_rpc.rs`, `tests/server_push.rs` |
+| `src/main.rs` | A6, B1, B3, G1–G3, J1, J2 | `tests/lifecycle.rs` |
 
 `tests/common/mod.rs` holds the async WebSocket client both server test files use. `tests/lifecycle.rs` drives the **compiled binary** via `env!("CARGO_BIN_EXE_yazi-claude-ide")` — it is the only check that proves the four modules compose, since the module tests call `start_sidecar` directly and cannot catch broken wiring.
 
@@ -84,11 +84,13 @@ The third channel does not come from yazi and does not obey G2. An external `ya 
 
 **Push frames go through a per-connection `mpsc::UnboundedSender`, not a broadcast.** Unbounded is load-bearing: `mention()` pushes the whole marked set in one synchronous loop, and H5 requires order while H9 forbids drops. A bounded channel breaks both.
 
+**`openDiff` is the only request answered out of band.** Every other `tools/call` is answered from `handle_json_rpc`'s return value, on the socket that asked. A configured viewer (section J) instead holds the request in `state.pending_diffs` and answers it later, from `finish_diff`, through that connection's `mpsc` sender — the same queue the pushes use. Two consequences a future reader will not guess: `handle_json_rpc` returning `None` now means *held*, not only *notification*; and the answer is `FILE_SAVED`, never `DIFF_ACCEPTED`, because the CLI's own prompt renders before any human can read a diff and an accept that arrives afterwards is measured to be ignored. J6 and [baseline.md](baseline.md) carry the measurement.
+
 **`last_pushed` is one sidecar-wide value, not per-client.** Clause D8 reads as if it should be per-client, and the observable behaviour still satisfies it only because of the D3 exception: a connection-open push bypasses `push()` and writes straight to the joining socket. This is deliberate — do not "fix" it into per-client dedupe state.
 
 **The anchor is provisional until the first `cd`.** yazi's cwd is where the user ran it, not necessarily where it opened, so `main.rs` seeds the anchor from `current_dir()` and latches the real one from the first `cd` event (which yazi emits at startup). That un-latched window lives for milliseconds and is what B1 describes.
 
-**`YCI_POLL_MS` and `YCI_FAILURES_BEFORE_GONE` exist only for the lifecycle tests**, to make liveness detection finish in about a second instead of production's measured six. Keep them in the `main.rs` wiring. Any new environment variable `src/` reads must also be added to the hostile-environment step in `ci.yml`, or that step stops covering it.
+**`YCI_DIFF_CMD` is off by default and section J does not run without it.** `YCI_POLL_MS` and `YCI_FAILURES_BEFORE_GONE` exist only for the lifecycle tests, to make liveness detection finish in about a second instead of production's measured six. Keep them in the `main.rs` wiring. Any new environment variable `src/` reads must also be added to the hostile-environment step in `ci.yml`, or that step stops covering it.
 
 **Two `lock.rs` tests use this repository's own directory layout as a fixture.** Both build paths from `env!("CARGO_MANIFEST_DIR")` and point at `claude-ide.yazi/`. Renaming or moving a tracked top-level directory breaks `b1_the_anchor_is_the_git_root_or_the_directory_itself`: `anchor_for` shells out to `git -C <dir> rev-parse --show-toplevel`, and on a path that no longer exists git exits non-zero, so the function falls through to returning that path itself instead of the repo root. `b1_the_pair_is_anchor_then_cursor` keeps passing on the same stale path, because `workspace_folders` only builds strings and never touches disk. The same rename already cost the harness once: `dev/manual/config/plugins/claude-ide.yazi` is a tracked symlink into the plugin directory, it was left pointing at a `plugin/` that no longer exists, and the only symptom was `harness.sh start` reporting `started` while no sidecar ran. `cargo test` cannot see any of this.
 

@@ -20,6 +20,7 @@ See [../docs/baseline.md](../docs/baseline.md) for the full protocol differences
 | --- | --- |
 | `fake-ide.ts` | Minimal fake IDE. Writes the lock file, opens a WebSocket, implements the MCP handshake and the tools. |
 | `probe.ts` | Test client that pretends to be Claude. Verifies auth, handshake, and tool responses. |
+| `diff-client.ts` | Sends one `openDiff` to a running sidecar and prints the reply. The section J harness step below uses it. |
 | `state.json` | The currently "selected" file. Editing it triggers a `selection_changed` push. Gitignored — it holds machine-local absolute paths. |
 | `fixtures/` | Per-session record of every message in both directions. Tokens, usernames, paths, and pids are scrubbed. |
 
@@ -84,5 +85,39 @@ Reading the result:
 | The prompt is corrupted or the CLI errors | Record it — an IDE that can break the user's typing is worse than one that cannot multi-select. |
 
 Also record whether the notification takes effect while the user is mid-typing, and whether `lineStart`/`lineEnd` of `0` is accepted for a whole-file mention.
+
+## Manual verification: `openDiff` (settled 2026-08-20)
+
+**Answered, and the answers are in [../docs/baseline.md](../docs/baseline.md).**
+`DIFF_ACCEPTED` suppresses the prompt only when it beats the render, so it cannot
+hold the veto for a human; the CLI never times out; and `FILE_SAVED` is honoured
+with contents the IDE changed. Section J of the contract is what came of it, and
+`../manual/README.md` drives the built thing. The procedure below is kept because
+it is how a future CLI version gets re-measured.
+
+Answers what a real diff view in yazi would cost. F5 answers `-32601`, and the CLI
+prints `Opened changes in yazi` in place of its inline diff, so the user approves
+a change nothing showed them. Three facts gate building the diff view; each is one
+run of the same procedure with a different `SPIKE_OPENDIFF`.
+
+Prepare a throwaway workspace with one small file in it — the runs edit it — and
+export `W` to its path. Turn auto-approve **off** in the Claude session (`shift+tab`
+until the prompt asks), or every run takes the no-confirmation path and measures
+nothing.
+
+1. Terminal A: `SPIKE_OPENDIFF=<mode> bun spike/fake-ide.ts "$W"`
+2. Terminal B: `cd "$W"`, run `claude`, `/ide`, pick `yazi-spike`.
+3. Ask: `Change the word "two" to "TWO" in target.txt.`
+4. Read terminal A for the `⏱` lines, and terminal B for what the CLI displayed.
+
+| Mode | Question | What to record |
+| --- | --- | --- |
+| `accept` | Does `DIFF_ACCEPTED` keep the CLI's own confirmation prompt? | Whether `Do you want to make this edit?` appeared, and whether the edit landed. A suppressed prompt means the IDE's answer is the only veto. |
+| `hang` | How long does the CLI wait, and is it blocked meanwhile? | The `⏱ close_tab …ms after openDiff` interval, whether the prompt appeared before that, and whether the CLI stayed usable. This bounds how long a human may read the diff. |
+| `saved` | Is `FILE_SAVED` honoured with contents the IDE changed? | `grep SPIKE_EDIT_ "$W"/target.txt`. A hit means the CLI wrote the IDE's bytes, so a user could edit the diff before accepting. No hit means the reply's contents are ignored. |
+
+`reject` reproduces the 2026-08-08 cancellation and is the negative control.
+`SPIKE_OPENDIFF=<mode>:<ms>` delays the answer — `accept:20000` is the realistic
+shape, a human reading a diff for twenty seconds before saying yes.
 
 Do not trust what the Claude session says about its own connection state — it only repeats the CLI's message. `IDE selection cancelled` is printed both when a workspace mismatch blocks adoption (the socket has completed a full handshake and stays open) and when an already-connected session simply dismisses the picker. The IDE-side server log is the only ground truth.

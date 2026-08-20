@@ -117,6 +117,36 @@ sidecar on the machine, and each one keeps only what carries its own
 implementation, and [`dev/docs/contract.md`](dev/docs/contract.md) section I is
 the specification.
 
+## Seeing the diff before you approve it
+
+**Claude Code hides its inline diff whenever an IDE is connected.** It prints
+`Opened changes in yazi` instead and then asks you to approve a change it has
+shown you nowhere. Point `YCI_DIFF_CMD` at a viewer and yazi shows it to you:
+
+```sh
+export YCI_DIFF_CMD='nvim -d "$1" "$2"'
+```
+
+`$1` is your file and `$2` is a private copy of what Claude proposes. yazi hides
+into its secondary screen, the viewer takes the terminal, and quitting it hands
+the terminal back. **Whatever you leave in `$2` is what Claude writes** — fix a
+name, drop a hunk, and it lands. Edit `$1` and you are simply editing your own
+file, which the sidecar neither notices nor prevents.
+
+A read-only viewer works and costs only the amendments:
+
+```sh
+export YCI_DIFF_CMD='git diff --no-index --color=always -- "$1" "$2" | delta'
+```
+
+**The confirmation stays in Claude Code either way.** The sidecar never answers
+`DIFF_ACCEPTED`, so the prompt in your Claude pane is still the thing that
+applies or cancels the edit — you read in yazi, you decide in Claude. Answering
+for you would not even work: the CLI renders that prompt the instant it asks for
+the diff, and an answer that arrives after a human has read anything comes too
+late to take it back. Unset the variable and nothing here happens; the sidecar
+declines the request exactly as it did before.
+
 ## Two yazi instances in one repository
 
 **Claude Code cannot pick between them, and this plugin cannot make it.** The
