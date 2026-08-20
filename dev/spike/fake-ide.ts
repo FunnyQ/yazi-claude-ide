@@ -63,8 +63,12 @@ type RpcMessage = {
 
 let logStream: fs.WriteStream | null = null;
 
+const START = Date.now();
+
 function log(dir: "in" | "out", msg: unknown): void {
-  const line = JSON.stringify({ dir, msg })
+  // `t` is milliseconds since startup. The openDiff experiment measures how long
+  // the CLI waits for an answer, and that is unreadable from an untimed log.
+  const line = JSON.stringify({ t: Date.now() - START, dir, msg })
     .replaceAll(authToken, "<TOKEN>")
     .replaceAll(homedir(), "~");
   logStream?.write(line + "\n");
@@ -209,6 +213,84 @@ const asText = (obj: unknown) => ({
   content: [{ type: "text", text: JSON.stringify(obj) }],
 });
 
+/**
+ * The openDiff experiment. F5 answers `-32601`, and the CLI still prints
+ * `Opened changes in yazi` in place of its inline diff, so the user approves a
+ * change nothing showed them. Opening a real diff in yazi's pane needs three
+ * facts this switch exists to collect:
+ *
+ * 1. `accept` — does the CLI keep its own confirmation prompt after
+ *    `DIFF_ACCEPTED`, or does the answer become the only veto?
+ * 2. `hang` — how long does the CLI wait, and does it block while waiting?
+ *    The answer bounds how long a human may spend reading the diff.
+ * 3. `saved` — is `FILE_SAVED` honoured with contents that differ from
+ *    `new_file_contents`? That is what would let the user edit the diff before
+ *    accepting it. The reply carries `SAVED_MARKER`; grep the target file for
+ *    it afterwards, because only the CLI can put it there.
+ *
+ * `SPIKE_OPENDIFF=<mode>[:<delay-ms>]`, modes `none` (default, `-32601`),
+ * `accept`, `reject`, `saved`, `hang`.
+ */
+const [OPEN_DIFF_MODE, OPEN_DIFF_DELAY] = (
+  process.env.SPIKE_OPENDIFF ?? "none"
+).split(":");
+const SAVED_MARKER = `SPIKE_EDIT_${randomBytes(3).toString("hex")}`;
+
+// When the pending openDiff was received, so the close_tab that follows can be
+// reported as an interval rather than a timestamp.
+let openDiffAt = 0;
+
+function openDiffResult(args?: Record<string, unknown>) {
+  switch (OPEN_DIFF_MODE) {
+    case "accept":
+      return { content: [{ type: "text", text: "DIFF_ACCEPTED" }] };
+    case "reject":
+      return {
+        content: [
+          { type: "text", text: "DIFF_REJECTED" },
+          { type: "text", text: String(args?.tab_name ?? "") },
+        ],
+      };
+    // PROTOCOL.md's shape for "the user saved the diff buffer": the verdict and
+    // the contents, as two blocks.
+    case "saved":
+      return {
+        content: [
+          { type: "text", text: "FILE_SAVED" },
+          {
+            type: "text",
+            text: `${String(args?.new_file_contents ?? "")}\n${SAVED_MARKER}\n`,
+          },
+        ],
+      };
+    default:
+      return null;
+  }
+}
+
+/** True when this openDiff was handled here and must not fall through. */
+function answerOpenDiff(
+  id: string | number,
+  args?: Record<string, unknown>,
+): boolean {
+  if (OPEN_DIFF_MODE === "none") return false;
+  openDiffAt = Date.now();
+  if (OPEN_DIFF_MODE === "hang") {
+    console.error("⏱ openDiff held open — no answer will be sent");
+    return true;
+  }
+  const result = openDiffResult(args);
+  if (!result) return false;
+  const delay = Number(OPEN_DIFF_DELAY ?? 0);
+  const reply = () => {
+    send({ jsonrpc: "2.0", id, result });
+    console.error(`⏱ openDiff answered after ${Date.now() - openDiffAt}ms`);
+  };
+  if (delay > 0) setTimeout(reply, delay);
+  else reply();
+  return true;
+}
+
 // Unknown tools return null; the caller turns that into a JSON-RPC error and logs it.
 function callTool(name: string | undefined, args?: Record<string, unknown>) {
   switch (name) {
@@ -330,10 +412,16 @@ function handle(msg: RpcMessage): void {
       send({ jsonrpc: "2.0", id: msg.id, result: { tools: ADVERTISED } });
       return;
     case "tools/call": {
-      const result = callTool(
-        msg.params?.name as string | undefined,
-        msg.params?.arguments as Record<string, unknown> | undefined,
-      );
+      const name = msg.params?.name as string | undefined;
+      const args = msg.params?.arguments as Record<string, unknown> | undefined;
+      if (name === "openDiff" && answerOpenDiff(msg.id, args)) return;
+      // The CLI sends close_tab twice per diff, with the openDiff tab_name.
+      // Under `hang` that interval is the CLI's patience, measured.
+      if (name === "close_tab" && openDiffAt)
+        console.error(
+          `⏱ close_tab ${Date.now() - openDiffAt}ms after openDiff (${args?.tab_name})`,
+        );
+      const result = callTool(name, args);
       if (result) send({ jsonrpc: "2.0", id: msg.id, result });
       else
         send({
@@ -420,6 +508,10 @@ console.error(`workspace ${workspaces.join(", ")}`);
 console.error(`state     ${STATE_FILE}`);
 console.error(
   `tools     ${ADVERTISED.length} advertised / ${TOOLS.length} implemented`,
+);
+console.error(
+  `openDiff  ${OPEN_DIFF_MODE}${OPEN_DIFF_DELAY ? ` after ${OPEN_DIFF_DELAY}ms` : ""}` +
+    (OPEN_DIFF_MODE === "saved" ? ` · marker ${SAVED_MARKER}` : ""),
 );
 
 // Any edit to state.json pushes a selection_changed notification, and any
