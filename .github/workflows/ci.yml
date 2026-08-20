@@ -37,7 +37,7 @@ jobs:
       # A test that secretly reads the developer's environment is permanently
       # green on a clean runner and only fails on a real machine. This step is
       # the clean runner made hostile. Add every variable the code reads — when
-      # src/ gains a sixth, this list must gain it too or the blindness returns.
+      # src/ gains a seventh, this list must gain it too or the blindness returns.
       - name: Run tests in a hostile environment
         env:
           CLAUDE_CONFIG_DIR: relative-config
@@ -45,6 +45,7 @@ jobs:
           YAZI_ID: hostile
           YCI_POLL_MS: hostile
           YCI_FAILURES_BEFORE_GONE: hostile
+          YCI_DIFF_CMD: hostile
         run: cargo test
 
   build:

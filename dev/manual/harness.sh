@@ -30,13 +30,17 @@ export YCI_COMMAND="$REPO/target/release/yazi-claude-ide"
 # up and needs no terminal (I11).
 export EDITOR="$HERE/block-opener"
 export YCI_BLOCK_OPENER_LOG="$HERE/run/opened"
+# J1 is opt-in, so the harness passes whatever the caller exported and nothing
+# when they exported nothing. `launch` names every variable it forwards, and a
+# variable missing from that line simply does not reach the sidecar.
+export YCI_DIFF_CMD="${YCI_DIFF_CMD:-}"
 
 tm() { tmux -L "$SOCKET" "$@"; }
 
 # One yazi in its own tmux session. `verify` starts a second one for G4.
 launch() { # session, directory
 	tm new-session -d -s "$1" -x 200 -y 50 \
-		"env YAZI_CONFIG_HOME=$YAZI_CONFIG_HOME CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR YCI_COMMAND='$YCI_COMMAND' EDITOR='$EDITOR' YCI_BLOCK_OPENER_LOG='$YCI_BLOCK_OPENER_LOG' yazi $2"
+		"env YAZI_CONFIG_HOME=$YAZI_CONFIG_HOME CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR YCI_COMMAND='$YCI_COMMAND' EDITOR='$EDITOR' YCI_BLOCK_OPENER_LOG='$YCI_BLOCK_OPENER_LOG' YCI_DIFF_CMD='$YCI_DIFF_CMD' yazi $2"
 }
 
 teardown() {
