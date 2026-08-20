@@ -509,7 +509,7 @@ dependencies = [
 
 [[package]]
 name = "yazi-claude-ide"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "futures-util",
  "getrandom",

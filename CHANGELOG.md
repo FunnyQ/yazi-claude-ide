@@ -5,6 +5,17 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] - 2026-08-20
+
+_tracks tag `v0.5.2`_
+
+### Added
+- A configured diff viewer: set `YCI_DIFF_CMD` and Claude's `openDiff` now launches it to show a proposed change before you accept, instead of silently applying edits with no preview. The request stays open until the viewer reports the file saved.
+- `dev/spike/diff-client.ts`, a standalone tool for exercising the diff viewer path during development.
+
+### Changed
+- `dev/manual/harness.sh` and CI's hostile-environment matrix now cover `YCI_DIFF_CMD`, so a bad or unset value is verified rather than assumed.
+
 ## [0.5.1] - 2026-08-09
 
 _tracks tag `v0.5.1`_
