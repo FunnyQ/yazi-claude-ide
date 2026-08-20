@@ -7,6 +7,23 @@ pub trait ToolContext {
     fn focused_file(&self) -> Option<String>;
     fn workspace_folders(&self) -> Vec<String>;
     fn reveal(&self, _file_path: &str);
+
+    /// J1-J3. `true` when a viewer was launched and this request is now held for
+    /// J5 to answer; `false` falls through to F5's `-32601`. Defaulted so that a
+    /// context with no viewer — every test context, and the sidecar itself until
+    /// `$YCI_DIFF_CMD` is set — needs to say nothing.
+    fn open_diff(&self, _connection: u64, _rpc_id: &Value, _request: DiffRequest<'_>) -> bool {
+        false
+    }
+}
+
+/// The three `openDiff` arguments section J uses, of the four the CLI sends.
+/// `new_file_path` is left out: it names where Claude intends to write, which is
+/// the one thing the viewer never needs.
+pub struct DiffRequest<'a> {
+    pub old_path: &'a str,
+    pub new_contents: &'a str,
+    pub tab_name: &'a str,
 }
 
 pub struct AdvertisedTool {
@@ -222,13 +239,12 @@ pub fn call_tool(
                 "message": "openFile requires filePath",
             })),
         }),
-        // openDiff falls through to None deliberately. The CLI calls it before every
-        // edit that needs confirming — in the four-tool list, not only when advertised —
-        // and reads DIFF_REJECTED as the user rejecting the change, so the edit is
-        // silently cancelled. DIFF_ACCEPTED is worse: it asserts an approval for a diff
-        // the user was never shown. -32601 says what is true, that this IDE has no diff
-        // view, and is measured to keep the CLI's own confirmation prompt, so the user
-        // still holds the veto.
+        // openDiff falls through to None deliberately, and `handle_json_rpc` gets
+        // first refusal on it (J1). Reaching here means no viewer was launched, so
+        // -32601 stands: DIFF_REJECTED reads to the CLI as the user rejecting the
+        // change and cancels the edit, DIFF_ACCEPTED asserts an approval for a diff
+        // the user was never shown, and a late DIFF_ACCEPTED cannot even do that —
+        // measured, the CLI's own prompt wins the race (F5, J6).
         _ => None,
     }
 }

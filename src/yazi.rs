@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::Map;
 use serde_json::Value;
+use serde_json::json;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 /// The kind the plugin publishes the marked set under (H2, H3).
@@ -12,10 +13,14 @@ pub const MARKED_KIND: &str = "claude-marked";
 /// The kind the editor publishes its live selection under (I2).
 pub const EDITOR_SELECTION_KIND: &str = "claude-editor-selection";
 
+/// The kind the diff viewer publishes when it exits (J4).
+pub const DIFF_DONE_KIND: &str = "claude-diff-done";
+
 /// `claude-marked` is ours because yazi has no event for marked-set changes (H1);
 /// `claude-editor-selection` is ours because the editor is not a yazi event
-/// source at all.
-pub const KINDS: &str = "hover,cd,claude-marked,claude-editor-selection";
+/// source at all; `claude-diff-done` is ours because a blocking shell yazi runs
+/// has no other way back (J4).
+pub const KINDS: &str = "hover,cd,claude-marked,claude-editor-selection,claude-diff-done";
 
 /// Each liveness probe costs about 7ms.
 pub const POLL_MS: u64 = 2_000;
@@ -57,11 +62,15 @@ pub struct EditorSelection {
 /// per keystroke, and the clarity is worth two allocations.
 pub type EditorSelectionFn = Box<dyn Fn(EditorSelection) + Send>;
 
+/// Carries the token of the `openDiff` whose viewer just exited (J4).
+pub type DiffDoneFn = Box<dyn Fn(String) + Send>;
+
 pub struct StreamHandlers {
     pub on_hover: UrlFn,
     pub on_cd: UrlFn,
     pub on_marked: MarkedFn,
     pub on_editor_selection: EditorSelectionFn,
+    pub on_diff_done: DiffDoneFn,
 }
 
 pub struct Subscription {
@@ -141,6 +150,15 @@ fn selection_of(body: &Map<String, Value>) -> Option<EditorSelection> {
     })
 }
 
+/// I3 and J4: the body's `yaziId`, not the sender, is what ties a broadcast to us.
+fn claims_yazi(body: &Map<String, Value>, yazi_id: &str) -> bool {
+    match body.get("yaziId") {
+        Some(Value::String(id)) => id == yazi_id,
+        Some(Value::Number(id)) => id.to_string() == yazi_id,
+        _ => false,
+    }
+}
+
 pub fn dispatch(line: &str, yazi_id: &str, handlers: &StreamHandlers) {
     let Some(event) = parse_event(line) else {
         return;
@@ -151,18 +169,23 @@ pub fn dispatch(line: &str, yazi_id: &str, handlers: &StreamHandlers) {
     // body is what ties it to this instance, and I2's broadcast means every other
     // sidecar on the machine is reading this same line (I3).
     if event.kind == EDITOR_SELECTION_KIND {
-        let claimed = match event.body.get("yaziId") {
-            Some(Value::String(id)) => id.clone(),
-            Some(Value::Number(id)) => id.to_string(),
-            _ => return,
-        };
-        if claimed != yazi_id {
-            return;
+        if claims_yazi(&event.body, yazi_id)
+            && let Some(selection) = selection_of(&event.body)
+        {
+            (handlers.on_editor_selection)(selection);
         }
-        let Some(selection) = selection_of(&event.body) else {
-            return;
-        };
-        (handlers.on_editor_selection)(selection);
+        return;
+    }
+
+    // J4 rides the same broadcast as I3, and for the same reason: the publisher is
+    // a shell yazi ran, joining DDS as its own peer.
+    if event.kind == DIFF_DONE_KIND {
+        if claims_yazi(&event.body, yazi_id)
+            && let Some(token) = event.body.get("token").and_then(Value::as_str)
+            && !token.is_empty()
+        {
+            (handlers.on_diff_done)(token.to_owned());
+        }
         return;
     }
 
@@ -275,6 +298,58 @@ pub fn reveal_args(yazi_id: &str, file_path: &str) -> Vec<String> {
         "reveal".to_string(),
         file_path.to_string(),
     ]
+}
+
+/// Single-quote for `sh`, the only quoting the diff script needs (J3).
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r"'\''"))
+}
+
+/// The script yazi's blocking shell runs: the user's template with the two paths
+/// in `$1` and `$2` (J1), then the publish that releases the held request (J4).
+/// A script rather than a command line because the template is the user's and
+/// must not be re-quoted, and because `--block` takes exactly one argument.
+pub fn diff_script(template: &str, yazi_id: &str, token: &str, old: &str, new: &str) -> String {
+    let body = json!({ "yaziId": yazi_id, "token": token }).to_string();
+    format!(
+        "set -- {} {}\n{}\nya pub-to 0 {} --json {}\n",
+        shell_quote(old),
+        shell_quote(new),
+        template,
+        DIFF_DONE_KIND,
+        shell_quote(&body),
+    )
+}
+
+/// The argv that hands the script to yazi's own terminal (J3).
+pub fn diff_args(yazi_id: &str, script_path: &str) -> Vec<String> {
+    vec![
+        "emit-to".to_string(),
+        yazi_id.to_string(),
+        "shell".to_string(),
+        format!("sh {}", shell_quote(script_path)),
+        "--block".to_string(),
+    ]
+}
+
+/// J3. `false` when the spawn itself failed, which J7 turns back into `-32601`.
+pub fn open_diff(yazi_id: &str, script_path: &str) -> bool {
+    match tokio::process::Command::new("ya")
+        .args(diff_args(yazi_id, script_path))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => {
+            drop(child);
+            true
+        }
+        Err(error) => {
+            eprintln!("failed to open diff in yazi: {error}");
+            false
+        }
+    }
 }
 
 pub fn reveal(yazi_id: &str, file_path: &str) {
@@ -400,6 +475,7 @@ mod tests {
             on_cd: Box::new(move |url| cd.lock().unwrap().push(url.to_string())),
             on_marked: Box::new(move |urls| marked.lock().unwrap().push(urls)),
             on_editor_selection: Box::new(|_| {}),
+            on_diff_done: Box::new(|_| {}),
         }
     }
 
@@ -865,6 +941,76 @@ mod tests {
         subscription.stop();
         subscription.stop();
         tokio::task::yield_now().await;
+    }
+
+    #[test]
+    fn j3_diff_args_asks_yazi_for_a_blocking_shell() {
+        assert_eq!(
+            diff_args("175", "/tmp/dir with spaces/view.sh"),
+            [
+                "emit-to",
+                "175",
+                "shell",
+                "sh '/tmp/dir with spaces/view.sh'",
+                "--block"
+            ]
+        );
+    }
+
+    #[test]
+    fn j1_j4_diff_script_sets_the_pair_then_publishes_the_token() {
+        let script = diff_script(
+            "nvim -d \"$1\" \"$2\"",
+            "175",
+            "cafe",
+            "/tmp/a.rs",
+            "/tmp/b.rs",
+        );
+        assert_eq!(
+            script,
+            concat!(
+                "set -- '/tmp/a.rs' '/tmp/b.rs'\n",
+                "nvim -d \"$1\" \"$2\"\n",
+                "ya pub-to 0 claude-diff-done --json ",
+                r#"'{"token":"cafe","yaziId":"175"}'"#,
+                "\n",
+            )
+        );
+    }
+
+    #[test]
+    fn j2_a_quote_in_a_path_cannot_escape_the_script() {
+        let script = diff_script("cat \"$2\"", "1", "t", "/tmp/it's.rs", "/tmp/b");
+        assert!(script.starts_with(r"set -- '/tmp/it'\''s.rs' '/tmp/b'"));
+    }
+
+    #[test]
+    fn j4_diff_done_is_filtered_on_yazi_id_not_sender() {
+        let tokens = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&tokens);
+        let handlers = StreamHandlers {
+            on_diff_done: Box::new(move |token| seen.lock().unwrap().push(token)),
+            ..empty_handlers()
+        };
+
+        // `ya pub-to` stamps a sender of its own, exactly as I3 describes.
+        dispatch(
+            r#"claude-diff-done,0,some-other-ya,{"yaziId":"175","token":"cafe"}"#,
+            "175",
+            &handlers,
+        );
+        dispatch(
+            r#"claude-diff-done,0,175,{"yaziId":"999","token":"nope"}"#,
+            "175",
+            &handlers,
+        );
+        dispatch(
+            r#"claude-diff-done,0,175,{"yaziId":"175"}"#,
+            "175",
+            &handlers,
+        );
+
+        assert_eq!(*tokens.lock().unwrap(), ["cafe"]);
     }
 
     #[test]
