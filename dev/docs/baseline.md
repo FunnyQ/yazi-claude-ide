@@ -231,6 +231,67 @@ Update(/workspace/.tool-probe.txt)
 
 The CLI evidently decides to defer the diff to the IDE from the mere fact that one is connected, before the `openDiff` result comes back — no answer the sidecar can give changes that line. This is the same class of problem as "losing the IDE is silent" above: the CLI owns the UX, and the protocol carries no way to say "I could not display this."
 
+### What an answer buys, measured three ways (2026-08-20)
+
+Measured against Claude Code **2.1.235** — two builds later than the 2.1.223 above — through
+`spike/fake-ide.ts` with the new `SPIKE_OPENDIFF` switch, eleven tools advertised, the session
+started with `--permission-mode default` and the user's auto-approve hook disabled, so every run
+provably took the confirmation path. One edit to one four-line file, repeated per row.
+
+| Answer | CLI's own prompt | Inline diff | Edit |
+| --- | --- | --- | --- |
+| `DIFF_ACCEPTED`, sent in 0ms | **not shown** | shown | applied |
+| never answered | shown | **suppressed**, replaced by `Opened changes in yazi-spike ⧉` | applied on Yes |
+| `FILE_SAVED` + contents | shown | suppressed | applied on Yes |
+
+Three findings, in the order they change a design:
+
+1. **`DIFF_ACCEPTED` takes the confirmation prompt away.** The transcript goes from the tool call
+   straight to the result, with no `Do you want to make this edit to target.txt?` anywhere. This is
+   the fact that separates a diff view from the current `-32601`: the moment the sidecar answers
+   yes, **the IDE holds the whole veto**, and a diff the user did not actually read becomes an
+   approval nobody can withdraw.
+2. **The CLI does not wait.** With `openDiff` left unanswered it printed its prompt immediately and
+   sat there. The request stayed outstanding for **242 seconds** with no timeout, no error, and no
+   retry; the single `close_tab` arrived only after the human answered. So a sidecar may take as
+   long as the user needs to read a diff — but it is racing that prompt, not blocking it, and
+   whichever verdict lands first wins.
+3. **`FILE_SAVED` is honoured with contents the IDE changed, and the agent is told.** The reply
+   carried the CLI's own `new_file_contents` plus one extra line the CLI had never sent, and that
+   line was on disk afterwards. The agent then said *"The user modified the change"* and re-read the
+   file unprompted. So the response is a real write channel: an editor that let the user amend the
+   diff before accepting would have those amendments land, and the agent would know.
+
+Note what rows 2 and 3 share: `FILE_SAVED` did **not** suppress the prompt, so it is not read as
+approval the way `DIFF_ACCEPTED` is. Only the second block — the contents — was acted on.
+
+**A late `DIFF_ACCEPTED` does not take the prompt back.** Measured separately with
+`SPIKE_OPENDIFF=accept:20000`, which answers twenty seconds late — the pace of a human actually
+reading a diff. The CLI rendered its prompt straight after calling `openDiff`, the answer arrived
+at `t+20s`, and the CLI **acknowledged it** by sending `close_tab` 5ms later — while leaving the
+prompt on screen and the file untouched. Twelve seconds later the prompt was still live; the edit
+landed only when a human pressed Yes. So row one's missing prompt was a race, not a rule: the
+answer suppresses the prompt only if it beats the render, and the render happens immediately. **Any
+diff a human is given time to read answers too late to hold the veto**, which means a diff view in
+yazi adds a second confirmation rather than replacing the CLI's. It cannot silently apply an edit
+either, which is the same fact read from the safe side.
+
+**A late `FILE_SAVED` keeps its contents, and loses cleanly to a user who answered first.**
+Measured with `SPIKE_OPENDIFF=saved:20000`, twice, one per ordering:
+
+| Who answered first | What landed |
+| --- | --- |
+| the IDE, then the human pressed Yes | the IDE's bytes, marker line and all |
+| the human pressed Yes, then the IDE answered 20s later | the CLI's own `new_file_contents`; the late answer was **discarded**, not written |
+
+So the amendment channel of finding 3 survives being answered at human speed — unlike the veto of
+finding 1, which does not. And the loser of the race is dropped rather than applied late: a
+`FILE_SAVED` arriving after the edit is already on disk does not clobber it. Whichever decision the
+user last saw is the one that stands, in both directions.
+
+The `Opened changes in yazi-spike ⧉` line and the suppressed inline diff reproduce exactly on
+2.1.235, so the residual cost recorded above is not a fixed bug.
+
 ## Marked files reach the context through `at_mentioned` (2026-08-08)
 
 Measured against Claude Code **2.1.226** — a later build than the 2.1.223 the rest of this document records — with `spike/fake-ide.ts` adopted by an interactive session.

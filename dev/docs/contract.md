@@ -82,7 +82,7 @@ Measured: the CLI calls tools it was never offered — `closeAllDiffTabs` on eve
 
 - **F3.** `openFile` MUST reveal the file in yazi — `ya emit-to <id> reveal <path>` — and return `Opened file: <path>`. This is the one out-of-scope tool yazi can honestly perform.
 - **F4.** Any tool not named in F1–F3 MUST return `-32601` (E2). Silence and `undefined` are both forbidden.
-- **F5.** `openDiff` MUST return `-32601`, and MUST NOT be answered. It is the one tool where a benign-looking answer does damage: the CLI calls it before every edit that needs confirming — in the F1 four-tool list, not only when advertised — and reads `DIFF_REJECTED` as **the user rejecting the change**, so the edit is silently cancelled. `DIFF_ACCEPTED` is worse: it asserts an approval for a diff the user was never shown. `-32601` says what is true, that this IDE has no diff view, and **is measured to keep the CLI's own confirmation prompt**, so the user still holds the veto. Measured against 2.1.223 — see [baseline.md](baseline.md), which also records the residual cost no answer can avoid: the CLI announces `Opened changes in yazi` and suppresses its inline diff, so the change is approved unseen.
+- **F5.** With no viewer configured (J1), `openDiff` MUST return `-32601`, and MUST NOT be answered. It is the one tool where a benign-looking answer does damage: the CLI calls it before every edit that needs confirming — in the F1 four-tool list, not only when advertised — and reads `DIFF_REJECTED` as **the user rejecting the change**, so the edit is silently cancelled. `DIFF_ACCEPTED` is worse: it asserts an approval for a diff the user was never shown. `-32601` says what is true, that this IDE has no diff view, and **is measured to keep the CLI's own confirmation prompt**, so the user still holds the veto. Measured against 2.1.223 — see [baseline.md](baseline.md), which also records the residual cost no answer can avoid: the CLI announces `Opened changes in yazi` and suppresses its inline diff, so the change is approved unseen. Section J is what closes that hole, and it does so **without taking this clause's answer back** — a configured viewer still leaves the veto where F5 puts it.
 
 ## G. Lifecycle
 
@@ -127,10 +127,59 @@ The route is measurable from outside yazi and every clause below was settled tha
 - **I10.** Every accepted selection MUST be logged — the path and the range, and **never the `text`**, which would put the contents of the user's files in `/tmp`. This channel has no other observable: it produces no yazi UI, it happens behind a block opener, and its whole failure mode is silence. The log line is also what `dev/manual/harness.sh verify` greps for, so it is the only reason I2, I3, and I11 can be checked against a real yazi at all.
 - **I11.** yazi MUST keep routing DDS while the block opener holds the terminal, or the channel does not exist. Verified rather than assumed: with a single yazi owning its own `.dds.sock` — the worst case, since every message routes through the blocked process — a publish issued while the opener was up was delivered to an outside subscriber. This clause is a standing assumption about yazi, not a requirement on the sidecar; `harness.sh verify` re-checks it.
 
+## J. The diff viewer
+
+F5 answers `openDiff` with `-32601` and keeps the user's veto in the CLI. It cannot keep the
+user's *eyes* there: the CLI suppresses its inline diff the moment an IDE is connected and prints
+`Opened changes in yazi` instead, so the change is approved unseen. This section opens a viewer in
+yazi's own pane. It does not move the veto, and clause J6 says why it must not try.
+
+Measured 2026-08-20 against Claude Code 2.1.235; see [baseline.md](baseline.md) for all six runs.
+
+- **J1.** The viewer is opt-in and has no default. `$YCI_DIFF_CMD` holds a shell command; unset or
+  blank means section J does not run and F5 stands unchanged. The command receives the two paths as
+  `$1` and `$2` — the user's file and the sidecar's copy of the proposed contents, in that order.
+  `nvim -d "$1" "$2"` is the value that makes J5 mean something; a read-only viewer such as
+  `git diff --no-index --color=always -- "$1" "$2" | delta` is equally legitimate and simply yields
+  no amendment.
+- **J2.** The sidecar MUST write `new_file_contents` to a file it owns, mode `0600`, and MUST pass
+  that path as `$2`. It MUST NOT read the user's file to build the diff — C4 is unchanged, and the
+  viewer is the party that reads both sides.
+- **J3.** The sidecar MUST run the template through its own yazi —
+  `ya emit-to <id> shell <template> --block` — because only yazi can hand the terminal over. The
+  sidecar is double-forked and has no terminal of its own.
+- **J4.** The viewer's exit MUST reach the sidecar as the DDS kind `claude-diff-done`, body
+  `{yaziId, token}`, published with `ya pub-to 0` and filtered on `yaziId` exactly as I3 requires —
+  `ya pub-to` stamps a `sender` of its own, so G2's filter would drop it. `token` names which
+  `openDiff` is being answered; a body naming an unknown token MUST be dropped.
+- **J5.** On `claude-diff-done` the sidecar MUST answer the held `openDiff` with `FILE_SAVED` and
+  the contents of `$2` **as they stand at that moment**, then delete the file. Whatever the user
+  changed in the viewer is what Claude writes. Measured: a `FILE_SAVED` sent twenty seconds late
+  still had its bytes written, and one that arrived after the user had already approved in the CLI
+  was discarded rather than applied — so both orderings are safe and neither can clobber the file
+  behind the user.
+- **J6.** The sidecar MUST NOT answer `DIFF_ACCEPTED` or `DIFF_REJECTED`. The CLI renders its own
+  confirmation prompt immediately after calling `openDiff`, and an answer only suppresses that
+  prompt if it beats the render — measured, an accept at `t+20s` was acknowledged with `close_tab`
+  and left the prompt live. **Any diff a human is given time to read answers too late to hold the
+  veto**, so a sidecar that claimed it would be asserting an approval it cannot deliver. `FILE_SAVED`
+  is the one verdict that carries the user's work without claiming their consent.
+- **J7.** Every failure MUST fall back to F5. A missing `$YAZI_ID`, a template that will not spawn,
+  a write that fails, a `claude-diff-done` that never comes, or a connection that closes first MUST
+  leave the request answered with `-32601` or unanswered — never with a fabricated verdict. The CLI
+  is measured not to time out an unanswered `openDiff` (242 s, no retry), so an abandoned request
+  costs the user nothing but the prompt they already have.
+- **J8.** The log line MUST carry the path and the tab name and **never the contents**, as I10
+  requires of the editor channel. The proposed contents are the user's file in all but name, and
+  the log lands in `/tmp`.
+- **J9.** A viewer that edits the user's file directly — `nvim -d` writes the left buffer too — is
+  the user editing their own file, and the sidecar MUST NOT try to detect or prevent it. Only `$2`
+  is read back.
+
 ## Non-goals for the MVP
 
 Recorded so that a future reader can tell a deliberate omission from an oversight.
 
 - File contents in `text` for the yazi channels (C4) and in a range mention (I5). Claude reads files with its own `Read` tool; from yazi the sidecar sends where to look, never what is there. The editor's live selection is the deliberate exception and the only one — see I10, which says what it costs.
-- Diagnostics, diffs, dirty state, saving — yazi cannot answer any of them honestly (F2).
+- Diagnostics, dirty state, saving — yazi cannot answer any of them honestly (F2). Diffs left this list on 2026-08-20: section J answers `openDiff` with a viewer yazi can actually run.
 - Retroactive adoption of a socket that connected while the workspace did not match. Unmeasured, and the MVP does not depend on it.
