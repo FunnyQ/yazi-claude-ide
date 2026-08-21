@@ -341,3 +341,34 @@ async fn j4_an_unknown_token_is_dropped() {
     assert!(client.silence(Duration::from_millis(300)).await.is_none());
     let _ = fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn j7_a_connection_that_closes_first_takes_its_copy_with_it() {
+    let token_out = Arc::new(Mutex::new(None));
+    let dir = std::env::temp_dir().join(format!("yci-j7-{}", std::process::id()));
+    let sidecar =
+        common::sidecar_with_diff(TOKEN, vec![], viewer(Arc::clone(&token_out), dir.clone())).await;
+    let mut client = Client::connect(&sidecar, TOKEN).await.unwrap();
+
+    client.raw(&open_diff_request(9, "/tmp/target.txt"));
+    assert!(client.silence(Duration::from_millis(200)).await.is_none());
+    let token = token_out.lock().unwrap().clone().expect("viewer ran");
+    assert!(dir.join("target.txt").exists());
+
+    // The user closes Claude Code with the viewer still up. Nobody is left to
+    // answer, so the copy of their file must not stay in the temp directory.
+    client.close();
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while dir.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the orphaned copy was never discarded"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+
+    // J7. The publish still arrives when the user quits the viewer; it finds no
+    // pending entry and stops there rather than answering a dead connection.
+    sidecar.finish_diff(&token);
+    assert!(!dir.exists());
+}

@@ -64,7 +64,7 @@ yazi ──ya.sync──► ps.pub_to(0, "claude-marked")        claude-ide.yazi
 | `src/tools.rs` | B6, C, E2, F, J1 | `mod tests` in file |
 | `src/yazi.rs` | G2, G3, H3, I2, I3, I6, J3, J4 | `mod tests` in file |
 | `src/server.rs` | A5, D, E, I5–I9, J5–J8 | `tests/server_rpc.rs`, `tests/server_push.rs` |
-| `src/main.rs` | A6, B1, B3, G1–G3, J1, J2 | `tests/lifecycle.rs` |
+| `src/main.rs` | A6, B1, B3, G1–G3, J1–J3, J5, J8, J9 | `tests/lifecycle.rs` |
 
 `tests/common/mod.rs` holds the async WebSocket client both server test files use. `tests/lifecycle.rs` drives the **compiled binary** via `env!("CARGO_BIN_EXE_yazi-claude-ide")` — it is the only check that proves the four modules compose, since the module tests call `start_sidecar` directly and cannot catch broken wiring.
 

@@ -96,6 +96,67 @@ fn spawn_sidecar_labelled(
     ChildGuard { child: Some(child) }
 }
 
+/// Stands in for yazi on `PATH`, so the compiled binary's own section J launcher
+/// runs against something. Only the four invocations the sidecar makes are
+/// handled: the DDS subscription, the liveness probe, the blocking shell that
+/// J3 asks for, and the publish the generated script ends with (J4).
+const FAKE_YA: &str = r#"#!/bin/sh
+case "$1" in
+sub)
+  # One file per line, moved into place atomically, so a publish cannot race the
+  # drain. The loop ends with the test's temp directory, which is what keeps a
+  # killed sidecar from leaving this shell behind.
+  i=0
+  while [ "$i" -lt 600 ]; do
+    [ -d "$YCI_TEST_BUS" ] || exit 0
+    for line in "$YCI_TEST_BUS"/*.line; do
+      [ -e "$line" ] || continue
+      cat "$line"
+      rm -f "$line"
+    done
+    i=$((i + 1))
+    sleep 0.05
+  done
+  ;;
+emit-to)
+  # `emit-to <id> shell <command> --block` is J3; `emit-to <id> noop` is the
+  # liveness probe and needs nothing but the exit status. The shell command is
+  # recorded rather than run: the test plays yazi's pane, so the viewer runs when
+  # the test says so and the race a real pane cannot have stays out of the suite.
+  if [ "$3" = "shell" ]; then
+    printf '%s' "$4" > "$YCI_TEST_SHELL.tmp"
+    mv "$YCI_TEST_SHELL.tmp" "$YCI_TEST_SHELL"
+  fi
+  ;;
+pub-to)
+  # `pub-to 0 <kind> --json <body>`, the publish J4 rides.
+  printf '%s,0,fake-ya,%s\n' "$3" "$5" > "$YCI_TEST_BUS/pub.tmp"
+  mv "$YCI_TEST_BUS/pub.tmp" "$YCI_TEST_BUS/pub.line"
+  ;;
+esac
+exit 0
+"#;
+
+fn mode_of(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path).expect("stat").permissions().mode() & 0o777
+}
+
+async fn wait_for_file(path: &Path) -> String {
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        if let Ok(contents) = fs::read_to_string(path) {
+            return contents;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "{} never appeared",
+            path.display()
+        );
+        tokio::time::sleep(POLL).await;
+    }
+}
+
 fn lock_files(config: &Path) -> Vec<PathBuf> {
     let dir = config.join("ide");
     let Ok(entries) = fs::read_dir(dir) else {
@@ -309,4 +370,145 @@ async fn initialize_and_tools_list_succeed_against_the_running_binary() {
             "getOpenEditors"
         ]
     );
+}
+
+/// The whole of section J through the compiled binary. `server_rpc.rs` hands
+/// `start_sidecar` a closure and `yazi.rs` checks the script it generates; only
+/// the binary owns `launch_diff`, and only this test shows that the copy, the
+/// script, yazi's blocking shell, the publish, and the held answer compose.
+#[tokio::test]
+async fn j1_j8_the_binary_opens_a_diff_and_answers_with_the_file_the_user_left() {
+    let temp = TempDir::new().unwrap();
+    let bus = temp.path().join("bus");
+    let shell_command_file = temp.path().join("shell-command");
+    let dollar_one_file = temp.path().join("dollar-one");
+    let bin = temp.path().join("bin");
+    fs::create_dir(&bus).unwrap();
+    fs::create_dir(&bin).unwrap();
+    fs::write(bin.join("ya"), FAKE_YA).unwrap();
+    fs::set_permissions(
+        bin.join("ya"),
+        <fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
+    )
+    .unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    // The user's own file. The sidecar must never read it (C4/J2); the viewer is
+    // the party that reads both sides, and this one only touches `$2`.
+    let user_file = temp.path().join("target.txt");
+    fs::write(&user_file, "one\ntwo\n").unwrap();
+    let tab_name = "✻ [Claude Code] target.txt (5c8bea) ⧉";
+
+    let mut child = ChildGuard {
+        child: Some(
+            Command::new(env!("CARGO_BIN_EXE_yazi-claude-ide"))
+                .env("CLAUDE_CONFIG_DIR", temp.path())
+                .env("YAZI_ID", "lifecycle-diff")
+                .env("YCI_POLL_MS", "2000")
+                .env("YCI_FAILURES_BEFORE_GONE", "100")
+                .env_remove("YCI_IDE_LABEL")
+                .env("PATH", &path)
+                .env("YCI_TEST_BUS", &bus)
+                .env("YCI_TEST_SHELL", &shell_command_file)
+                .env(
+                    "YCI_DIFF_CMD",
+                    format!(
+                        "printf '%s' \"$1\" > '{}'\nprintf 'amended\\n' >> \"$2\"",
+                        dollar_one_file.display()
+                    ),
+                )
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("spawn compiled sidecar binary"),
+        ),
+    };
+
+    let lock_path = wait_for_one_lock(temp.path());
+    let lock = read_lock(&lock_path);
+    let mut client = Client::connect_port(port_from(&lock_path), &lock.auth_token)
+        .await
+        .expect("authorized client should connect");
+    client.raw(
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 11,
+            "method": "tools/call",
+            "params": {
+                "name": "openDiff",
+                "arguments": {
+                    "old_file_path": user_file.to_str().unwrap(),
+                    "new_file_path": user_file.to_str().unwrap(),
+                    "new_file_contents": "one\nTWO\n",
+                    "tab_name": tab_name,
+                },
+            },
+        })
+        .to_string(),
+    );
+
+    // J3. What the sidecar asked yazi to run, recorded by the fake `ya`.
+    let shell_command = wait_for_file(&shell_command_file).await;
+    let script = PathBuf::from(
+        shell_command
+            .strip_prefix("sh '")
+            .and_then(|rest| rest.strip_suffix('\''))
+            .expect("the blocking shell runs the generated script"),
+    );
+    let dir = script
+        .parent()
+        .expect("the script sits in its own directory");
+    // J2. The copy keeps the user's file name, and it is the user's file in all
+    // but name — nobody else on the machine may read it.
+    let copy = dir.join("target.txt");
+    assert_eq!(fs::read_to_string(&copy).unwrap(), "one\nTWO\n");
+    assert_eq!(mode_of(&copy), 0o600);
+    assert_eq!(mode_of(&script), 0o600);
+    assert_eq!(mode_of(dir), 0o700);
+    // J6. Nothing is owed while the viewer is up, and above all no verdict.
+    assert!(client.silence(Duration::from_millis(300)).await.is_none());
+
+    // yazi's pane, played by the test: run the script, which runs the user's
+    // template and then publishes J4's completion through the fake `ya`.
+    assert!(
+        Command::new("sh")
+            .arg("-c")
+            .arg(&shell_command)
+            .env("PATH", &path)
+            .env("YCI_TEST_BUS", &bus)
+            .status()
+            .expect("run the generated script")
+            .success()
+    );
+
+    let response = client.next(Duration::from_secs(8)).await.unwrap();
+    assert_eq!(response["id"], 11);
+    assert_eq!(response["result"]["content"][0]["text"], "FILE_SAVED");
+    assert_eq!(
+        response["result"]["content"][1]["text"],
+        "one\nTWO\namended\n"
+    );
+    // J1. The user's file is `$1` and the copy is `$2`, in that order.
+    assert_eq!(
+        fs::read_to_string(&dollar_one_file).unwrap(),
+        user_file.to_str().unwrap()
+    );
+    // J5. The copy does not outlive the answer.
+    assert!(!dir.exists());
+    // J9. `$1` is the user editing their own file; the sidecar reads only `$2`.
+    assert_eq!(fs::read_to_string(&user_file).unwrap(), "one\ntwo\n");
+
+    signal(&child, libc::SIGTERM);
+    let stderr = String::from_utf8_lossy(&child.wait().stderr).into_owned();
+    // J8. The path and the tab name, never the contents — this log lands in /tmp.
+    assert!(stderr.contains(&format!(
+        "yazi-claude-ide: diff {} ({tab_name})",
+        user_file.display()
+    )));
+    assert!(!stderr.contains("TWO"));
+    assert!(!stderr.contains("amended"));
 }
