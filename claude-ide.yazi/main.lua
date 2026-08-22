@@ -23,8 +23,7 @@ end)
 
 function M:setup(opts)
 	local command = (opts and opts.command) or "yazi-claude-ide"
-	local logs = "/tmp/yazi-claude-ide/logs"
-	local log = logs .. "/" .. (os.getenv("YAZI_ID") or "unknown") .. ".log"
+	local log = ya.quote((os.getenv("YAZI_ID") or "unknown") .. ".log")
 
 	-- No directory is passed: `cx` does not exist yet when init.lua runs setup(),
 	-- and yazi's own cwd is not necessarily the directory it opened. The sidecar
@@ -38,10 +37,17 @@ function M:setup(opts)
 	--
 	-- `mkdir -p` first: a redirect into a directory that does not exist fails the
 	-- whole command, and the only symptom is a yazi that starts with no sidecar.
+	-- The uid is in the directory name because /tmp is shared: without it the first
+	-- user to start yazi owns the directory and every other user on the machine
+	-- hits that same silent failure. The sidecar names its own scratch the same way.
 	Command("sh")
 		:arg({
 			"-c",
-			"mkdir -p " .. ya.quote(logs) .. "; nohup " .. command .. " >> " .. ya.quote(log) .. " 2>&1 &",
+			'logs=/tmp/yazi-claude-ide+$(id -u)/logs; mkdir -p "$logs"; nohup '
+				.. command
+				.. ' >> "$logs"/'
+				.. log
+				.. " 2>&1 &",
 		})
 		:status()
 end

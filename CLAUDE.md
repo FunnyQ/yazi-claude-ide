@@ -102,7 +102,7 @@ The third channel does not come from yazi and does not obey G2. An external `ya 
 
 **Section I's two coordinate systems are not a mistake to tidy up.** `lineStart`/`lineEnd` on the wire are 1-based and inclusive and the sidecar subtracts one; `charStart`/`charEnd` are already 0-based with an exclusive end and pass through untouched. Making them agree breaks one of them. The character pair exists because the CLI's range is end-exclusive: a whole-line selection must end at the *length of the last line*, and a sidecar that filled that in would have to read the file (C4). Sending `0` there silently drops the last line from Claude's count and collapses a single-line selection to nothing — both measured, see [baseline.md](baseline.md).
 
-**Logging is `eprintln!` to stderr.** `main.lua` creates `/tmp/yazi-claude-ide/logs/` and redirects it to `<YAZI_ID>.log` inside it. No logging framework.
+**Logging is `eprintln!` to stderr.** `main.lua` creates `/tmp/yazi-claude-ide+<uid>/logs/` and redirects it to `<YAZI_ID>.log` inside it. The uid is in the name because /tmp is shared — `launch_diff` names its scratch root the same way. No logging framework.
 
 **Failure paths mostly swallow and continue.** That is the contract's shape — the error surface stays small on purpose.
 

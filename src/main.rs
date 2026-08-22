@@ -30,7 +30,21 @@ fn write_private(path: &Path, contents: &str) -> Option<()> {
 /// script yazi will run, and ask yazi for the terminal. `None` at every failure,
 /// which J7 turns back into `-32601`.
 fn launch_diff(template: &str, yazi_id: &str, launch: DiffLaunch<'_>) -> Option<PathBuf> {
-    let dir = std::env::temp_dir().join(format!("yazi-claude-ide-diff-{}", launch.token));
+    // The token directory itself is still created non-recursively, so a token that
+    // is already on disk fails the launch instead of reusing someone else's scratch.
+    // The uid is in the root because `temp_dir()` is the shared /tmp on Linux, where
+    // the first user to open a diff would otherwise own the directory and leave every
+    // other user's `openDiff` failing into J7. `main.lua` names the log directory the
+    // same way. macOS needs neither — `TMPDIR` is already per-user there.
+    let root = std::env::temp_dir()
+        .join(format!("yazi-claude-ide+{}", unsafe { libc::getuid() }))
+        .join("diff");
+    fs::DirBuilder::new()
+        .mode(0o700)
+        .recursive(true)
+        .create(&root)
+        .ok()?;
+    let dir = root.join(launch.token);
     fs::DirBuilder::new().mode(0o700).create(&dir).ok()?;
 
     // Keep the user's file name: the viewer reads its syntax highlighting off it,

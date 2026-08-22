@@ -59,7 +59,7 @@ teardown() {
 # The plugin writes one log per instance, named after its YAZI_ID, and the
 # sidecar's first line names both its port and that id. That pair is the only
 # instance-to-lock-file mapping.
-LOGS=/tmp/yazi-claude-ide/logs
+LOGS="/tmp/yazi-claude-ide+$(id -u)/logs"
 ids() { for f in "$LOGS"/*.log; do basename "$f" .log; done; }
 port_of() { sed -n 's|.*ws://127\.0\.0\.1:\([0-9]*\).*|\1|p' "$LOGS/$1.log"; }
 field_of() { sed -n "s/.*\"$2\":\"\{0,1\}\([^,\"}]*\).*/\1/p" "$1"; }
