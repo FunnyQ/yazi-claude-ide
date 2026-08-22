@@ -5,6 +5,13 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3] - 2026-08-22
+
+_tracks tag `v0.5.3`_
+
+### Changed
+- Sidecar logs moved from `/tmp/yazi-claude-ide-<YAZI_ID>.log` to `/tmp/yazi-claude-ide+<uid>/logs/<YAZI_ID>.log`, and the diff viewer's scratch files from `<tmpdir>/yazi-claude-ide-diff-<token>/` to `<tmpdir>/yazi-claude-ide+<uid>/diff/<token>/`. Update anything that tails or greps the old log path; the plugin half only moves after `ya pkg upgrade`. The uid keeps both directories per-user on a machine where `/tmp` is shared.
+
 ## [0.5.2] - 2026-08-20
 
 _tracks tag `v0.5.2`_
