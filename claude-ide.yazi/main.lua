@@ -23,7 +23,8 @@ end)
 
 function M:setup(opts)
 	local command = (opts and opts.command) or "yazi-claude-ide"
-	local log = "/tmp/yazi-claude-ide-" .. (os.getenv("YAZI_ID") or "unknown") .. ".log"
+	local logs = "/tmp/yazi-claude-ide/logs"
+	local log = logs .. "/" .. (os.getenv("YAZI_ID") or "unknown") .. ".log"
 
 	-- No directory is passed: `cx` does not exist yet when init.lua runs setup(),
 	-- and yazi's own cwd is not necessarily the directory it opened. The sidecar
@@ -34,8 +35,14 @@ function M:setup(opts)
 	-- block yazi's startup, so the only shape that leaves a live process behind is
 	-- nohup + `&` under a shell we wait for. That wait is instant. Measured in
 	-- dev/docs/yazi-capability.md.
+	--
+	-- `mkdir -p` first: a redirect into a directory that does not exist fails the
+	-- whole command, and the only symptom is a yazi that starts with no sidecar.
 	Command("sh")
-		:arg({ "-c", "nohup " .. command .. " >> " .. ya.quote(log) .. " 2>&1 &" })
+		:arg({
+			"-c",
+			"mkdir -p " .. ya.quote(logs) .. "; nohup " .. command .. " >> " .. ya.quote(log) .. " 2>&1 &",
+		})
 		:status()
 end
 

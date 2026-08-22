@@ -41,7 +41,7 @@ from outside yazi, so `ya emit-to` cannot build a marked set. Everything else
 uses `emit-to`, because keys depend on where the cursor happens to be.
 
 ```sh
-ID=$(grep -o 'yazi=[0-9]*' /tmp/yazi-claude-ide-*.log | head -1 | cut -d= -f2)
+ID=$(grep -o 'yazi=[0-9]*' /tmp/yazi-claude-ide/logs/*.log | head -1 | cut -d= -f2)
 SB=$PWD/dev/spike/yazi/sandbox
 
 ya emit-to $ID cd "$SB/dir-a"        # cursor entry follows, anchor does not

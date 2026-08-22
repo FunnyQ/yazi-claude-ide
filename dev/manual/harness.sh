@@ -56,10 +56,12 @@ teardown() {
 	pkill -f "$HERE/block-opener" 2>/dev/null || true
 }
 
-# The plugin writes one log per instance, and the sidecar's first line names both
-# its port and its YAZI_ID. That pair is the only instance-to-lock-file mapping.
-ids() { for f in /tmp/yazi-claude-ide-*.log; do basename "$f" .log | cut -d- -f4; done; }
-port_of() { sed -n 's|.*ws://127\.0\.0\.1:\([0-9]*\).*|\1|p' "/tmp/yazi-claude-ide-$1.log"; }
+# The plugin writes one log per instance, named after its YAZI_ID, and the
+# sidecar's first line names both its port and that id. That pair is the only
+# instance-to-lock-file mapping.
+LOGS=/tmp/yazi-claude-ide/logs
+ids() { for f in "$LOGS"/*.log; do basename "$f" .log; done; }
+port_of() { sed -n 's|.*ws://127\.0\.0\.1:\([0-9]*\).*|\1|p' "$LOGS/$1.log"; }
 field_of() { sed -n "s/.*\"$2\":\"\{0,1\}\([^,\"}]*\).*/\1/p" "$1"; }
 
 case "${1:-}" in
@@ -67,7 +69,7 @@ start)
 	cargo build --release --manifest-path "$REPO/Cargo.toml"
 	teardown
 	mkdir -p "$CLAUDE_CONFIG_DIR/ide"
-	rm -f "$CLAUDE_CONFIG_DIR"/ide/*.lock /tmp/yazi-claude-ide-*.log
+	rm -f "$CLAUDE_CONFIG_DIR"/ide/*.lock "$LOGS"/*.log
 	launch "$SESSION" "$SANDBOX"
 	sleep 4
 	echo "started"
@@ -85,7 +87,7 @@ lock)
 	echo
 	;;
 log)
-	cat /tmp/yazi-claude-ide-*.log 2>/dev/null || echo "no sidecar log"
+	cat "$LOGS"/*.log 2>/dev/null || echo "no sidecar log"
 	;;
 sidecar)
 	# The tmux command line names the sidecar too, so match how it is really run.
@@ -187,7 +189,7 @@ verify)
 	# j j lands on one.txt; space marks and steps, so two files end up marked.
 	for k in j j Space Space c v; do tm send-keys -t "$SESSION" "$k"; sleep 0.5; done
 	sleep 1
-	if grep -q 'marked 2 file(s)' /tmp/yazi-claude-ide-*.log; then
+	if grep -q 'marked 2 file(s)' "$LOGS"/*.log; then
 		ok h "the marked set reached the sidecar"
 	else
 		bad h "pressing cv published nothing the sidecar saw"
@@ -216,13 +218,13 @@ verify)
 	else
 		ok i "block opener holds the terminal: $(cat "$YCI_BLOCK_OPENER_LOG")"
 		relay "not-$id"
-		if grep -q 'selection ' /tmp/yazi-claude-ide-*.log; then
+		if grep -q 'selection ' "$LOGS"/*.log; then
 			bad i "a selection addressed to another yazi was acted on"
 		else
 			ok i "a selection addressed to another yazi is ignored"
 		fi
 		relay "$id"
-		if grep -q "selection $SANDBOX/one.txt L10-20" /tmp/yazi-claude-ide-*.log; then
+		if grep -q "selection $SANDBOX/one.txt L10-20" "$LOGS"/*.log; then
 			ok i "a selection published from outside reached the sidecar past a block opener"
 		else
 			bad i "the sidecar saw no selection while the block opener was up"
