@@ -11,7 +11,7 @@ cargo test --test lifecycle                  # one integration target
 cargo test a5_server_binds_loopback_only     # one test by name
 cargo clippy --all-targets -- -D warnings
 cargo fmt --check
-cargo install --path .                       # install the binary users' main.lua expects
+cargo install --path . --root ~/.local       # install the binary users' main.lua expects, where install.sh puts it
 dev/manual/harness.sh verify                 # the [manual] clauses, needs a real yazi
 ```
 
