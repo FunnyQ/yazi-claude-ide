@@ -24,3 +24,10 @@ tokio-tungstenite = "0.30.0"
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+# Full debuginfo strands a set of .o files in target/debug/deps on every version bump on macOS; line tables keep panic file:line.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
