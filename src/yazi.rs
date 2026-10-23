@@ -321,8 +321,7 @@ pub fn open_diff(yazi_id: &str, script_path: &str) -> bool {
     }
 }
 
-pub fn reveal(runtime: &tokio::runtime::Handle, yazi_id: &str, file_path: &str) {
-    let _reactor = runtime.enter();
+pub fn reveal(yazi_id: &str, file_path: &str) {
     match tokio::process::Command::new("ya")
         .args(reveal_args(yazi_id, file_path))
         .stdin(Stdio::null())

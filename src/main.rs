@@ -107,7 +107,6 @@ async fn main() -> std::io::Result<()> {
     // it before an await or file write.
     let workspace_state = Arc::clone(&state);
     let reveal_yazi_id = yazi_id.clone();
-    let reveal_runtime = tokio::runtime::Handle::current();
     let auth_token = lock::new_auth_token();
     let diff_template = std::env::var("YCI_DIFF_CMD")
         .ok()
@@ -116,7 +115,7 @@ async fn main() -> std::io::Result<()> {
     let sidecar = Arc::new(
         start_sidecar(StartOptions {
             workspace_folders: Box::new(move || folders_of(&workspace_state)),
-            reveal: Box::new(move |path| yazi::reveal(&reveal_runtime, &reveal_yazi_id, path)),
+            reveal: Box::new(move |path| yazi::reveal(&reveal_yazi_id, path)),
             open_diff: Box::new(move |launch| {
                 launch_diff(diff_template.as_deref()?, &diff_yazi_id, launch)
             }),
