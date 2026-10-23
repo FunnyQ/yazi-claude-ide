@@ -21,21 +21,28 @@ SOCKET=yaziclaudeide
 SESSION=s
 SANDBOX="$REPO/dev/spike/yazi/sandbox"
 
-export YAZI_CONFIG_HOME="$HERE/config"
-export CLAUDE_CONFIG_DIR="$HERE/run"
-export YCI_COMMAND="$REPO/target/release/yazi-claude-ide"
-export EDITOR="$HERE/block-opener"
-export YCI_BLOCK_OPENER_LOG="$HERE/run/opened"
+FORWARDED=()
+forward() { # name, value
+	export "$1=$2"
+	FORWARDED+=("$1")
+}
+forward YAZI_CONFIG_HOME "$HERE/config"
+forward CLAUDE_CONFIG_DIR "$HERE/run"
+forward YCI_COMMAND "$REPO/target/release/yazi-claude-ide"
+forward EDITOR "$HERE/block-opener"
+forward YCI_BLOCK_OPENER_LOG "$HERE/run/opened"
 # J1 is opt-in, so the harness passes whatever the caller exported and nothing
-# when they exported nothing. `launch` names every variable it forwards, and a
-# variable missing from that line simply does not reach the sidecar.
-export YCI_DIFF_CMD="${YCI_DIFF_CMD:-}"
+# when they exported nothing.
+forward YCI_DIFF_CMD "${YCI_DIFF_CMD:-}"
 
 tm() { tmux -L "$SOCKET" "$@"; }
 
 launch() { # session, directory
-	tm new-session -d -s "$1" -x 200 -y 50 \
-		"env YAZI_CONFIG_HOME=$YAZI_CONFIG_HOME CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR YCI_COMMAND='$YCI_COMMAND' EDITOR='$EDITOR' YCI_BLOCK_OPENER_LOG='$YCI_BLOCK_OPENER_LOG' YCI_DIFF_CMD='$YCI_DIFF_CMD' yazi $2"
+	local command=env name
+	for name in "${FORWARDED[@]}"; do
+		command+=" $name=$(printf '%q' "${!name}")"
+	done
+	tm new-session -d -s "$1" -x 200 -y 50 "$command yazi $2"
 }
 
 teardown() {
@@ -51,9 +58,8 @@ teardown() {
 	pkill -f "$HERE/block-opener" 2>/dev/null || true
 }
 
-# The plugin writes one log per instance, named after its YAZI_ID, and the
-# sidecar's first line names both its port and that id. That pair is the only
-# instance-to-lock-file mapping.
+# The plugin writes one log per instance, named after its YAZI_ID; the
+# sidecar's startup line names its port (g4_the_startup_log_line_maps_the_yazi_id_to_its_port).
 LOGS="/tmp/yazi-claude-ide+$(id -u)/logs"
 ids() { for f in "$LOGS"/*.log; do basename "$f" .log; done; }
 port_of() { sed -n 's|.*ws://127\.0\.0\.1:\([0-9]*\).*|\1|p' "$LOGS/$1.log"; }
@@ -144,10 +150,13 @@ verify)
 	"$0" stop >/dev/null
 
 	# G4. Two instances in different directories, so the one to be killed is
-	# addressable by its own command line. `start` clears the logs, so the id
-	# present before the second launch is the victim's.
+	# addressable by its own command line.
 	"$0" start >/dev/null
 	victim_id=$(ids)
+	if [ "$(printf '%s\n' "$victim_id" | wc -l)" -ne 1 ] || [ ! -f "$LOGS/$victim_id.log" ]; then
+		echo "FAIL [g4] expected exactly one instance log before the second launch, got: $victim_id"
+		exit 1
+	fi
 	launch t "$SANDBOX/dir-a"
 	sleep 4
 	survivor_id=$(ids | grep -v "^$victim_id\$" || true)
