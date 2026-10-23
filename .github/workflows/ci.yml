@@ -36,8 +36,8 @@ jobs:
 
       # A test that secretly reads the developer's environment is permanently
       # green on a clean runner and only fails on a real machine. This step is
-      # the clean runner made hostile. Add every variable the code reads — when
-      # src/ gains a seventh, this list must gain it too or the blindness returns.
+      # the clean runner made hostile; tests/ci_env.rs fails when src/ reads a
+      # variable this list misses.
       - name: Run tests in a hostile environment
         env:
           CLAUDE_CONFIG_DIR: relative-config
