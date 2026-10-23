@@ -5,6 +5,14 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.4] - 2026-10-23
+
+_tracks tag `v0.5.4`_
+
+### Fixed
+- The manual harness verify no longer fails the block opener check on yazi 26.9.1, because it now polls for the opener for up to 10 seconds instead of sleeping a fixed 2 seconds.
+- The manual harness now forwards environment variables with correct quoting, so a YCI_DIFF_CMD containing single quotes no longer breaks.
+
 ## [0.5.3] - 2026-08-22
 
 _tracks tag `v0.5.3`_
