@@ -52,10 +52,7 @@ function M:setup(opts)
 		:status()
 end
 
---- H2. The user's "send these to Claude" gesture. An empty set is published as
---- an empty list rather than suppressed: the sidecar turns that into whatever
---- the cursor sits on (H7), the way yazi's own commands read an empty selection.
---- The sidecar decides, because only it knows the path still stats.
+--- H2.
 function M:entry()
 	local n = send_marked()
 	ya.notify({
