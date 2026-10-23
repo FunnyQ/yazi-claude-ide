@@ -210,7 +210,9 @@ verify)
 	id=$(ids | head -1)
 	for k in j j; do tm send-keys -t "$SESSION" "$k"; sleep 0.5; done
 	tm send-keys -t "$SESSION" Enter
-	sleep 2
+	# Since yazi 26.9.1 (sxyazi/yazi#4271) a block opener waits up to 5s for
+	# terminal probe replies, which a detached tmux never sends.
+	for _ in $(seq 20); do [ -s "$YCI_BLOCK_OPENER_LOG" ] && break; sleep 0.5; done
 	relay() { # yazi id
 		ya pub-to 0 claude-editor-selection --json \
 			"{\"yaziId\":\"$1\",\"url\":\"$SANDBOX/one.txt\",\"lineStart\":10,\"lineEnd\":20}"
