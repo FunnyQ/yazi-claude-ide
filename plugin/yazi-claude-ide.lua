@@ -1,7 +1,3 @@
--- Publishes this editor's live selection to the yazi-claude-ide sidecar, so
--- Claude sees line ranges the file manager itself has no way to know about.
--- Selecting is the whole gesture — there is no keybinding and no setup call.
---
 -- This file is the reference implementation of section I of the contract. Any
 -- editor can take its place by publishing the same body; see dev/docs/contract.md.
 --
@@ -72,12 +68,10 @@ local function selection(mode)
     lineEnd = last.line,
     charStart = char_start,
     charEnd = char_end,
-    -- Dropped above the cap, which costs the line count but keeps the range.
     text = #text <= MAX_TEXT_BYTES and text or nil,
   }
 end
 
---- A zero-width range at the cursor: how the editor says the selection is gone.
 --- The sidecar reads same-line-same-character as empty and clears the display.
 local function dismissed()
   local cursor = vim.api.nvim_win_get_cursor(0)
