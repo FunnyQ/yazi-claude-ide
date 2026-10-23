@@ -486,6 +486,121 @@ async fn j1_j8_the_binary_opens_a_diff_and_answers_with_the_file_the_user_left()
         "yazi-claude-ide: diff {} ({tab_name})",
         user_file.display()
     )));
+    assert!(stderr.contains("yazi-claude-ide: diff closed"));
     assert!(!stderr.contains("TWO"));
     assert!(!stderr.contains("amended"));
+}
+
+#[tokio::test]
+async fn i10_the_binary_logs_the_selection_range_and_never_the_text() {
+    let temp = TempDir::new().unwrap();
+    let bus = temp.path().join("bus");
+    let bin = temp.path().join("bin");
+    fs::create_dir(&bus).unwrap();
+    fs::create_dir(&bin).unwrap();
+    fs::write(bin.join("ya"), FAKE_YA).unwrap();
+    fs::set_permissions(
+        bin.join("ya"),
+        <fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755),
+    )
+    .unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let user_file = temp.path().join("selected.txt");
+    fs::write(&user_file, "one\nsecret-two\nsecret-three\n").unwrap();
+    let text = "secret-two\nsecret-three\n";
+
+    let mut child = ChildGuard {
+        child: Some(
+            Command::new(env!("CARGO_BIN_EXE_yazi-claude-ide"))
+                .env("CLAUDE_CONFIG_DIR", temp.path())
+                .env("YAZI_ID", "lifecycle-selection")
+                .env("YCI_POLL_MS", "2000")
+                .env("YCI_FAILURES_BEFORE_GONE", "100")
+                .env_remove("YCI_IDE_LABEL")
+                .env_remove("YCI_DIFF_CMD")
+                .env("PATH", &path)
+                .env("YCI_TEST_BUS", &bus)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("spawn compiled sidecar binary"),
+        ),
+    };
+
+    let lock_path = wait_for_one_lock(temp.path());
+    let lock = read_lock(&lock_path);
+    let mut client = Client::connect_port(port_from(&lock_path), &lock.auth_token)
+        .await
+        .expect("authorized client should connect");
+    let body = json!({
+        "yaziId": "lifecycle-selection",
+        "url": user_file.to_str().unwrap(),
+        "lineStart": 2,
+        "lineEnd": 3,
+        "charStart": 0,
+        "charEnd": 0,
+        "text": text,
+    });
+    fs::write(
+        bus.join("selection.tmp"),
+        format!("claude-editor-selection,0,fake-ya,{body}\n"),
+    )
+    .unwrap();
+    fs::rename(bus.join("selection.tmp"), bus.join("selection.line")).unwrap();
+
+    let deadline = Instant::now() + TIMEOUT;
+    loop {
+        let frame = client.next(TIMEOUT).await.expect("selection push");
+        if frame["params"]["text"] == text {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the selection was never pushed");
+    }
+
+    signal(&child, libc::SIGTERM);
+    let stderr = String::from_utf8_lossy(&child.wait().stderr).into_owned();
+    assert!(stderr.contains(&format!(
+        "yazi-claude-ide: selection {} L2-3",
+        user_file.display()
+    )));
+    assert!(!stderr.contains("secret"));
+}
+
+#[test]
+fn g4_the_startup_log_line_maps_the_yazi_id_to_its_port() {
+    let temp = TempDir::new().unwrap();
+    let mut child = ChildGuard {
+        child: Some(
+            Command::new(env!("CARGO_BIN_EXE_yazi-claude-ide"))
+                .env("CLAUDE_CONFIG_DIR", temp.path())
+                .env("YAZI_ID", "lifecycle-startup-line")
+                .env("YCI_POLL_MS", "2000")
+                .env("YCI_FAILURES_BEFORE_GONE", "100")
+                .env_remove("YCI_IDE_LABEL")
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("spawn compiled sidecar binary"),
+        ),
+    };
+    let port = port_from(&wait_for_one_lock(temp.path()));
+    signal(&child, libc::SIGTERM);
+    let stderr = String::from_utf8_lossy(&child.wait().stderr).into_owned();
+    let lines: Vec<_> = stderr
+        .lines()
+        .filter(|line| line.contains("ws://127.0.0.1:"))
+        .collect();
+    assert_eq!(lines.len(), 1, "{stderr}");
+    assert!(
+        lines[0].contains(&format!(
+            "ws://127.0.0.1:{port} yazi=lifecycle-startup-line "
+        )),
+        "{stderr}"
+    );
 }

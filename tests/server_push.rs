@@ -179,6 +179,24 @@ async fn d7_the_next_connection_after_the_last_close_is_pushed_again() {
 }
 
 #[tokio::test]
+async fn d8_a_client_joining_after_the_last_close_is_pushed_the_file_the_previous_client_held() {
+    let server = sidecar().await;
+    let path = fixture("Cargo.toml");
+    let mut first = connect(&server).await;
+    server.set_focus(Some(&path));
+    assert_eq!(file_path(&next(&mut first).await), path);
+    first.close();
+    sleep(QUIET).await;
+
+    server.set_focus(Some(env!("CARGO_MANIFEST_DIR")));
+    let mut second = connect(&server).await;
+    assert_eq!(second.silence(QUIET).await, None);
+
+    server.set_focus(Some(&path));
+    assert_eq!(file_path(&next(&mut second).await), path);
+}
+
+#[tokio::test]
 async fn d8_a_focus_change_reaches_every_open_connection() {
     let server = sidecar().await;
     let mut first = connect(&server).await;
@@ -272,6 +290,21 @@ async fn h7_an_empty_set_falls_back_to_the_hovered_path_including_a_directory() 
     server.mention(&[]);
     assert_eq!(file_path(&next(&mut client).await), path);
     assert_eq!(server.focused_file(), None);
+}
+
+#[tokio::test]
+async fn h7_the_sidecar_stat_filters_a_hovered_fallback_that_has_since_vanished() {
+    let server = sidecar().await;
+    let mut client = connect(&server).await;
+    let temp = TempDir::new().expect("tempdir");
+    let path = temp.path().join("gone.txt");
+    std::fs::write(&path, "gone").expect("write fixture");
+    server.set_focus(path.to_str());
+    let _ = next(&mut client).await;
+    std::fs::remove_file(&path).expect("remove fixture");
+
+    server.mention(&[]);
+    assert_eq!(client.silence(QUIET).await, None);
 }
 
 #[tokio::test]

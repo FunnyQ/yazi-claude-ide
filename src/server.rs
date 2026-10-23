@@ -16,10 +16,8 @@ use crate::tools::{self, DiffRequest, Position, Selection, SelectionPayload, Too
 pub struct StartOptions {
     pub workspace_folders: Box<dyn Fn() -> Vec<String> + Send + Sync>,
     pub reveal: Box<dyn Fn(&str) + Send + Sync>,
-    /// J1-J3. Returns the path whose contents J5 reads back, or `None` when no
-    /// viewer is configured or the launch failed (J7). Everything on disk and
-    /// everything about yazi lives behind this closure; the server owns only the
-    /// token, the held request, and the answer.
+    /// Everything on disk and everything about yazi lives behind this closure;
+    /// the server owns only the token, the held request, and the answer.
     pub open_diff: Box<dyn Fn(DiffLaunch<'_>) -> Option<PathBuf> + Send + Sync>,
     pub auth_token: String,
 }
@@ -135,29 +133,19 @@ impl Sidecar {
         }
     }
 
-    /// I5. `lines` is 1-based and inclusive as the editor counts them; `chars` is
-    /// already 0-based with an exclusive end and passes straight through. The two
-    /// conventions differ on purpose — I4 says why. `text` is the editor's own
-    /// buffer contents; the sidecar never reads a file to fill it (C4).
     pub fn set_editor_selection(
         &self,
         file_path: &str,
-        lines: (u32, u32),
-        chars: (u32, u32),
+        one_based_lines: (u32, u32),
+        zero_based_chars: (u32, u32),
         text: &str,
     ) {
         if !tools::is_file(file_path) {
             return;
         }
-        // Derived, never asserted (I5). A zero-width range is how an editor says
-        // the selection is gone, and claiming `isEmpty: false` there would leave
-        // the CLI showing a selection the user has already dismissed.
-        let is_empty = lines.0 == lines.1 && chars.0 == chars.1;
-        // A selection covering nothing has no contents, whatever the editor sent —
-        // and the CLI counts its display from this field.
+        let is_empty =
+            one_based_lines.0 == one_based_lines.1 && zero_based_chars.0 == zero_based_chars.1;
         let text = if is_empty { "" } else { text };
-        // No dedupe (I7): dragging a selection sends range after range for one
-        // unchanged path, and D6's path-keyed check would swallow all but the first.
         let frame = json!({
             "jsonrpc": "2.0",
             "method": "selection_changed",
@@ -166,8 +154,14 @@ impl Sidecar {
                 "filePath": file_path,
                 "fileUrl": format!("file://{file_path}"),
                 "selection": Selection {
-                    start: Position { line: lines.0.saturating_sub(1), character: chars.0 },
-                    end: Position { line: lines.1.saturating_sub(1), character: chars.1 },
+                    start: Position {
+                        line: one_based_lines.0.saturating_sub(1),
+                        character: zero_based_chars.0,
+                    },
+                    end: Position {
+                        line: one_based_lines.1.saturating_sub(1),
+                        character: zero_based_chars.1,
+                    },
                     is_empty,
                 },
             },
@@ -176,17 +170,11 @@ impl Sidecar {
         if !self.inner.broadcast(frame) {
             return;
         }
-        // I8. The CLI now displays a range, and D6 would keep the next hover onto
-        // this same file silent — leaving that range on screen after the user has
-        // left it. Forgetting the path is what makes that hover speak again.
         if let Ok(mut state) = self.inner.state.lock() {
             state.last_pushed = None;
         }
     }
 
-    /// J5. The viewer for `token` has exited: answer its held `openDiff` with the
-    /// file as it now stands, then take the copy off disk. An unknown token is
-    /// dropped (J4), and so is a connection that closed while the user read (J7).
     pub fn finish_diff(&self, token: &str) {
         let Ok(mut state) = self.inner.state.lock() else {
             return;
@@ -206,8 +194,6 @@ impl Sidecar {
             .map(|client| client.frames.clone());
         drop(state);
 
-        // Whatever the user left behind, including nothing: a viewer that only
-        // displays leaves the sidecar's copy exactly as it was written (J1).
         let contents = std::fs::read_to_string(&pending.new_path).unwrap_or_default();
         discard_diff_copy(&pending.new_path);
         let Some(frames) = frames else {
@@ -238,9 +224,6 @@ impl Sidecar {
         if let Some(sender) = sender {
             let _ = sender.send(());
         }
-        // Dropping every queue sender is what ends the connection tasks: each one
-        // sees its receiver close and answers with a WebSocket close frame. The
-        // listener oneshot above only stops new connections being accepted.
         if let Ok(mut state) = self.inner.state.lock() {
             state.clients.clear();
             state.last_pushed = None;
@@ -348,11 +331,7 @@ impl ToolContext for Inner {
         }) else {
             return false;
         };
-        // J8. The path and the tab, never the contents — this log lands in /tmp.
-        eprintln!(
-            "yazi-claude-ide: diff {} ({})",
-            request.old_path, request.tab_name
-        );
+        eprintln!("{}", diff_log_line(&request));
         let Ok(mut state) = self.state.lock() else {
             return false;
         };
@@ -364,6 +343,13 @@ impl ToolContext for Inner {
         });
         true
     }
+}
+
+fn diff_log_line(request: &DiffRequest<'_>) -> String {
+    format!(
+        "yazi-claude-ide: diff {} ({})",
+        request.old_path, request.tab_name
+    )
 }
 
 // tungstenite requires the auth callback to return a full HTTP rejection response.
@@ -503,10 +489,9 @@ where
     close_connection(&inner, id);
 }
 
-/// J5. The launcher makes one directory per request and puts nothing in it but
-/// this copy and the script yazi ran, so the directory goes with the copy.
-/// Failures are ignored: a file left in the temp directory is not worth an error
-/// path (J7).
+/// The launcher makes one directory per request, holding only this copy and the
+/// script yazi ran. Failures are ignored: a file left in the temp directory is
+/// not worth an error path (J7).
 fn discard_diff_copy(new_path: &std::path::Path) {
     match new_path.parent() {
         Some(dir) => {
@@ -521,8 +506,6 @@ fn discard_diff_copy(new_path: &std::path::Path) {
 fn close_connection(inner: &Inner, id: u64) {
     if let Ok(mut state) = inner.state.lock() {
         state.clients.retain(|client| client.id != id);
-        // J7. Nobody is left to answer, and the viewer may well still be up; the
-        // publish that follows it will find no pending entry and stop there.
         let orphaned: Vec<_> = state
             .pending_diffs
             .extract_if(.., |pending| pending.connection == id)
@@ -531,9 +514,6 @@ fn close_connection(inner: &Inner, id: u64) {
             discard_diff_copy(&pending.new_path);
         }
         if state.clients.is_empty() {
-            // The next connection is owed D3 again — one push of the then-current
-            // file. Clearing `last_pushed` ensures the next connection sees its D3
-            // push even if the focused file never changes.
             state.last_pushed = None;
         }
     }
@@ -581,9 +561,6 @@ fn handle_json_rpc(frame: &str, ctx: &dyn ToolContext, connection: u64) -> Optio
                 .and_then(Value::as_object)
                 .cloned()
                 .unwrap_or_else(Map::new);
-            // J1. openDiff is the one tool answered out of band, so it gets first
-            // refusal: a launched viewer holds the request until J5, and anything
-            // else falls through to call_tool's -32601 (F5, J7).
             if name == "openDiff" {
                 let argument = |key| {
                     arguments
@@ -632,4 +609,24 @@ fn failure(id: Value, message: String) -> Value {
 fn log_dropped_frame(frame: &str) {
     let truncated: String = frame.chars().take(200).collect();
     eprintln!("Dropped malformed JSON-RPC frame: {truncated}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn j8_the_diff_log_line_carries_path_and_tab_but_never_contents() {
+        let line = diff_log_line(&DiffRequest {
+            old_path: "/tmp/target.txt",
+            new_contents: "proposed secret contents",
+            tab_name: "✻ [Claude Code] target.txt (5c8bea) ⧉",
+        });
+        assert!(line.contains("/tmp/target.txt"), "{line}");
+        assert!(
+            line.contains("✻ [Claude Code] target.txt (5c8bea) ⧉"),
+            "{line}"
+        );
+        assert!(!line.contains("proposed secret contents"), "{line}");
+    }
 }

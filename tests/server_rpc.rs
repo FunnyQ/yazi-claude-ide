@@ -230,18 +230,39 @@ async fn d8_multiple_clients_can_connect_and_receive_responses() {
 }
 
 #[tokio::test]
-async fn stop_closes_an_already_open_connection() {
+async fn stop_sends_every_open_connection_a_close_frame_and_refuses_new_ones() {
+    use futures_util::StreamExt;
+    use tokio_tungstenite::tungstenite::Message;
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
     let server = sidecar().await;
-    let mut client = Client::connect(&server, TOKEN).await.expect("connect");
-    assert!(client.call(11, "tools/list", None).await["result"].is_object());
+    let mut sockets = Vec::new();
+    for _ in 0..2 {
+        let mut request = format!("ws://127.0.0.1:{}", server.port())
+            .into_client_request()
+            .unwrap();
+        request
+            .headers_mut()
+            .insert("x-claude-code-ide-authorization", TOKEN.parse().unwrap());
+        let (socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+        sockets.push(socket);
+    }
+    let mut probe = Client::connect(&server, TOKEN).await.expect("connect");
+    assert!(probe.call(11, "tools/list", None).await["result"].is_object());
 
     server.stop();
     server.stop();
 
-    assert!(
-        client.closed(Duration::from_secs(2)).await,
-        "stop() must close connections already accepted, not just the listener"
-    );
+    for mut socket in sockets {
+        let frame = tokio::time::timeout(Duration::from_secs(2), socket.next())
+            .await
+            .expect("stop() must close connections already accepted, not just the listener");
+        assert!(
+            matches!(frame, Some(Ok(Message::Close(_)))),
+            "expected a close frame, got {frame:?}"
+        );
+    }
+    assert!(Client::connect(&server, TOKEN).await.is_err());
 }
 
 fn viewer(
@@ -252,6 +273,7 @@ fn viewer(
         let copy = dir.join("target.txt");
         fs::create_dir_all(&dir).ok()?;
         fs::write(&copy, launch.new_contents).ok()?;
+        fs::write(dir.join("diff.sh"), "true").ok()?;
         *token_out.lock().unwrap() = Some(launch.token.to_owned());
         Some(copy)
     })
@@ -284,6 +306,56 @@ async fn f5_j7_open_diff_without_a_viewer_is_refused() {
     let response = client.next(Duration::from_secs(2)).await.unwrap();
 
     assert_eq!(response["error"]["code"], -32601);
+}
+
+#[tokio::test]
+async fn j7_a_viewer_that_fails_to_launch_falls_back_to_minus_32601() {
+    let launched = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&launched);
+    let sidecar = common::sidecar_with_diff(
+        TOKEN,
+        vec![],
+        Box::new(move |launch| {
+            seen.lock().unwrap().push((
+                launch.old_path.to_owned(),
+                launch.new_contents.to_owned(),
+                launch.token.len(),
+            ));
+            None
+        }),
+    )
+    .await;
+    let mut client = Client::connect(&sidecar, TOKEN).await.unwrap();
+
+    client.raw(&open_diff_request(10, "/tmp/target.txt"));
+    let response = client.next(Duration::from_secs(2)).await.unwrap();
+
+    assert_eq!(response["id"], 10);
+    assert_eq!(response["error"]["code"], -32601);
+    assert_eq!(
+        *launched.lock().unwrap(),
+        [("/tmp/target.txt".to_owned(), "one\nTWO\n".to_owned(), 32)]
+    );
+}
+
+#[tokio::test]
+async fn j1_a_viewer_that_only_displays_answers_with_the_contents_as_written() {
+    let token_out = Arc::new(Mutex::new(None));
+    let dir = std::env::temp_dir().join(format!("yci-j1-{}", std::process::id()));
+    let sidecar =
+        common::sidecar_with_diff(TOKEN, vec![], viewer(Arc::clone(&token_out), dir.clone())).await;
+    let mut client = Client::connect(&sidecar, TOKEN).await.unwrap();
+
+    client.raw(&open_diff_request(11, "/tmp/target.txt"));
+    assert!(client.silence(Duration::from_millis(200)).await.is_none());
+
+    let token = token_out.lock().unwrap().clone().expect("viewer ran");
+    sidecar.finish_diff(&token);
+
+    let response = client.next(Duration::from_secs(2)).await.unwrap();
+    assert_eq!(response["result"]["content"][0]["text"], "FILE_SAVED");
+    assert_eq!(response["result"]["content"][1]["text"], "one\nTWO\n");
+    assert!(!dir.exists());
 }
 
 #[tokio::test]
@@ -333,7 +405,7 @@ async fn j4_an_unknown_token_is_dropped() {
 }
 
 #[tokio::test]
-async fn j7_a_connection_that_closes_first_takes_its_copy_with_it() {
+async fn j7_a_connection_that_closes_first_takes_its_copy_with_it_and_a_late_finish_does_nothing() {
     let token_out = Arc::new(Mutex::new(None));
     let dir = std::env::temp_dir().join(format!("yci-j7-{}", std::process::id()));
     let sidecar =

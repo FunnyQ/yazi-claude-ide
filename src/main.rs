@@ -107,6 +107,7 @@ async fn main() -> std::io::Result<()> {
     // it before an await or file write.
     let workspace_state = Arc::clone(&state);
     let reveal_yazi_id = yazi_id.clone();
+    let reveal_runtime = tokio::runtime::Handle::current();
     let auth_token = lock::new_auth_token();
     let diff_template = std::env::var("YCI_DIFF_CMD")
         .ok()
@@ -115,7 +116,7 @@ async fn main() -> std::io::Result<()> {
     let sidecar = Arc::new(
         start_sidecar(StartOptions {
             workspace_folders: Box::new(move || folders_of(&workspace_state)),
-            reveal: Box::new(move |path| yazi::reveal(&reveal_yazi_id, path)),
+            reveal: Box::new(move |path| yazi::reveal(&reveal_runtime, &reveal_yazi_id, path)),
             open_diff: Box::new(move |launch| {
                 launch_diff(diff_template.as_deref()?, &diff_yazi_id, launch)
             }),
@@ -154,24 +155,18 @@ async fn main() -> std::io::Result<()> {
                 marked_sidecar.mention(&urls);
             }),
             on_editor_selection: Box::new(move |selection| {
-                // I10. The range, never the text — this log lands in /tmp, and the
-                // text is the contents of the user's file. It is also the only
-                // observable this channel has: no yazi UI, behind a block opener,
-                // and its whole failure mode is silence.
                 eprintln!(
                     "yazi-claude-ide: selection {} L{}-{}",
-                    selection.url, selection.line_start, selection.line_end
+                    selection.url, selection.one_based_lines.0, selection.one_based_lines.1
                 );
                 editor_selection_sidecar.set_editor_selection(
                     &selection.url,
-                    (selection.line_start, selection.line_end),
-                    (selection.char_start, selection.char_end),
+                    selection.one_based_lines,
+                    selection.zero_based_chars,
                     &selection.text,
                 );
             }),
             on_diff_done: Box::new(move |token| {
-                // J8 again: the token names which request, and nothing about the
-                // contents the user just read.
                 eprintln!("yazi-claude-ide: diff closed");
                 diff_done_sidecar.finish_diff(&token);
             }),

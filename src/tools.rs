@@ -104,8 +104,6 @@ pub struct ToolResult {
 }
 
 pub fn exists(file_path: &str) -> bool {
-    // Weaker than the regular-file test on purpose: a mention may name a directory,
-    // and the CLI lists it. Every stat failure still means "not worth mentioning".
     fs::metadata(file_path).is_ok()
 }
 
@@ -153,16 +151,10 @@ fn as_plain(text: &str) -> ToolResult {
     }
 }
 
-/// Reproduces the TypeScript's `${args.filePath}` template interpolation.
-///
-/// `Display for Value` is not that: it emits JSON, so a string would arrive at the
-/// CLI quoted and an absent key as `null`. JS prints a string bare and a missing
-/// property as `undefined`, which is what the F2 message must say. Composite values
-/// stay JSON — JS would coerce them to `[object Object]`, and nothing on this path
-/// sends one.
 fn interpolate(value: Option<&Value>) -> String {
     match value {
         Some(Value::String(text)) => text.clone(),
+        // JS would print `[object Object]`; nothing on this path sends a composite.
         Some(other) => other.to_string(),
         None => "undefined".to_owned(),
     }
@@ -531,9 +523,20 @@ mod tests {
     }
 
     #[test]
-    fn h6_exists_accepts_directory() {
+    fn h6_a_directory_exists_for_a_mention_but_is_not_a_file() {
         let dir = TempDir::new().unwrap();
-        assert!(exists(&dir.path().to_string_lossy()));
+        let path = dir.path().to_string_lossy();
+        assert!(exists(&path));
+        assert!(!is_file(&path));
+    }
+
+    #[test]
+    fn f2_interpolate_prints_strings_bare_absent_as_undefined_and_composites_as_json() {
+        assert_eq!(interpolate(Some(&json!("/tmp/doc.txt"))), "/tmp/doc.txt");
+        assert_eq!(interpolate(None), "undefined");
+        assert_eq!(interpolate(Some(&json!(null))), "null");
+        assert_eq!(interpolate(Some(&json!(["a", 1]))), r#"["a",1]"#);
+        assert_eq!(interpolate(Some(&json!({"k": "v"}))), r#"{"k":"v"}"#);
     }
 
     #[test]

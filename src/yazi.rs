@@ -41,16 +41,11 @@ pub struct DdsEvent {
 
 pub type UrlFn = Box<dyn Fn(&str) + Send>;
 pub type MarkedFn = Box<dyn Fn(Vec<String>) + Send>;
-/// What the editor published, before any conversion. Lines are 1-based and
-/// inclusive; characters are 0-based with an exclusive end. They differ on
-/// purpose — see I4 before changing either.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditorSelection {
     pub url: String,
-    pub line_start: u32,
-    pub line_end: u32,
-    pub char_start: u32,
-    pub char_end: u32,
+    pub one_based_lines: (u32, u32),
+    pub zero_based_chars: (u32, u32),
     pub text: String,
 }
 
@@ -129,10 +124,8 @@ fn selection_of(body: &Map<String, Value>) -> Option<EditorSelection> {
 
     Some(EditorSelection {
         url: url.to_owned(),
-        line_start,
-        line_end,
-        char_start,
-        char_end,
+        one_based_lines: (line_start, line_end),
+        zero_based_chars: (char_start, char_end),
         text: body
             .get("text")
             .and_then(Value::as_str)
@@ -328,10 +321,8 @@ pub fn open_diff(yazi_id: &str, script_path: &str) -> bool {
     }
 }
 
-pub fn reveal(yazi_id: &str, file_path: &str) {
-    // Gotcha: `tokio::process::Command::spawn` needs a reactor, so this must be
-    // called inside the tokio runtime context. The handler always runs in a task,
-    // but a future caller from a plain thread would panic.
+pub fn reveal(runtime: &tokio::runtime::Handle, yazi_id: &str, file_path: &str) {
+    let _reactor = runtime.enter();
     match tokio::process::Command::new("ya")
         .args(reveal_args(yazi_id, file_path))
         .stdin(Stdio::null())
@@ -484,10 +475,8 @@ mod tests {
     fn selection(url: &str, lines: (u32, u32), chars: (u32, u32), text: &str) -> EditorSelection {
         EditorSelection {
             url: url.to_owned(),
-            line_start: lines.0,
-            line_end: lines.1,
-            char_start: chars.0,
-            char_end: chars.1,
+            one_based_lines: lines,
+            zero_based_chars: chars,
             text: text.to_owned(),
         }
     }
