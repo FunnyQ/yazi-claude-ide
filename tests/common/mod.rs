@@ -14,7 +14,6 @@ use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::{Error as ConnectError, Message};
 use yazi_claude_ide::server::{DiffLaunch, Sidecar, StartOptions, start_sidecar};
 
-/// A path inside the crate root, used as a file that is certain to stat.
 pub fn fixture(name: &str) -> String {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join(name)
@@ -26,7 +25,6 @@ pub async fn sidecar(token: &str, folders: Vec<String>) -> Sidecar {
     start_sidecar(StartOptions {
         workspace_folders: Box::new(move || folders.clone()),
         reveal: Box::new(|_| {}),
-        // No viewer: every openDiff in these tests takes F5's -32601 path.
         open_diff: Box::new(|_| None),
         auth_token: token.to_owned(),
     })
@@ -34,9 +32,6 @@ pub async fn sidecar(token: &str, folders: Vec<String>) -> Sidecar {
     .expect("test sidecar should start")
 }
 
-/// A sidecar whose viewer is the closure, standing in for the one main.rs wires
-/// to yazi (J1). The closure writes the copy the way the real launcher does, so
-/// a test can amend it and watch J5 read it back.
 pub async fn sidecar_with_diff(
     token: &str,
     folders: Vec<String>,
@@ -122,8 +117,6 @@ impl Client {
         self.next(dur).await.ok()
     }
 
-    /// `true` once the socket has closed. The reader task drops the frame sender
-    /// when the connection ends, so a closed channel is the observable proof.
     pub async fn closed(&mut self, wait: Duration) -> bool {
         timeout(wait, async {
             while self.incoming.recv().await.is_some() {}

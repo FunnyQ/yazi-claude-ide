@@ -15,7 +15,6 @@ struct Folders {
     folders: Vec<String>,
 }
 
-/// J2. The copy and the script are the user's file in all but name.
 fn write_private(path: &Path, contents: &str) -> Option<()> {
     let mut file = fs::OpenOptions::new()
         .write(true)
@@ -26,12 +25,7 @@ fn write_private(path: &Path, contents: &str) -> Option<()> {
     file.write_all(contents.as_bytes()).ok()
 }
 
-/// J1-J3. Put the proposed contents where the viewer can open them, write the
-/// script yazi will run, and ask yazi for the terminal. `None` at every failure,
-/// which J7 turns back into `-32601`.
 fn launch_diff(template: &str, yazi_id: &str, launch: DiffLaunch<'_>) -> Option<PathBuf> {
-    // The token directory itself is still created non-recursively, so a token that
-    // is already on disk fails the launch instead of reusing someone else's scratch.
     // The uid is in the root because `temp_dir()` is the shared /tmp on Linux, where
     // the first user to open a diff would otherwise own the directory and leave every
     // other user's `openDiff` failing into J7. `main.lua` names the log directory the
@@ -114,8 +108,6 @@ async fn main() -> std::io::Result<()> {
     let workspace_state = Arc::clone(&state);
     let reveal_yazi_id = yazi_id.clone();
     let auth_token = lock::new_auth_token();
-    // J1. Read once: an opt-in nobody set means section J never runs, and F5's
-    // -32601 is what every openDiff gets.
     let diff_template = std::env::var("YCI_DIFF_CMD")
         .ok()
         .filter(|template| !template.trim().is_empty());
@@ -249,7 +241,43 @@ async fn main() -> std::io::Result<()> {
     liveness.stop();
     stream.stop();
     sidecar.stop();
-    // A6 applies to all three paths; removal completes before main returns.
     lock::remove_lock(&dir, sidecar.port());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn j2_diff_scratch_files_are_private_to_the_user() {
+        let path = std::env::temp_dir().join(format!("yci-j2-private-{}", std::process::id()));
+        let _ = fs::remove_file(&path);
+        write_private(&path, "contents").unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        let _ = fs::remove_file(&path);
+        assert_eq!(mode, 0o600);
+    }
+
+    #[test]
+    fn j2_a_token_already_on_disk_fails_the_launch_instead_of_reusing_its_scratch() {
+        let token = format!("yci-j2-taken-{}", std::process::id());
+        let dir = std::env::temp_dir()
+            .join(format!("yazi-claude-ide+{}", unsafe { libc::getuid() }))
+            .join("diff")
+            .join(&token);
+        fs::create_dir_all(&dir).unwrap();
+        let launched = launch_diff(
+            "true",
+            "0",
+            DiffLaunch {
+                token: &token,
+                old_path: "/nonexistent/old.rs",
+                new_contents: "new",
+            },
+        );
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(launched, None);
+    }
 }

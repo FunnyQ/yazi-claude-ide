@@ -77,7 +77,6 @@ pub fn anchor_for(dir: &Path) -> PathBuf {
         return normalise(Path::new(root.trim()));
     }
 
-    // Not a repository, or no git on PATH. Either way the directory stands alone.
     normalise(dir)
 }
 
@@ -123,7 +122,6 @@ pub fn write_lock(dir: &Path, port: u16, lock: &LockFile) -> io::Result<PathBuf>
         Ok(path.clone())
     })();
     if result.is_err() {
-        // A failed publish must not leave a temporary discovery file behind.
         let _ = fs::remove_file(temp);
     }
     result
@@ -134,12 +132,10 @@ pub fn read_lock(dir: &Path, port: u16) -> Option<LockFile> {
 }
 
 pub fn remove_lock(dir: &Path, port: u16) {
-    // Already gone. Removing a lock twice is not an error.
     let _ = fs::remove_file(lock_path(dir, port));
 }
 
 /**
- * Republish the folder pair, keeping pid, token, and everything else (B3, B4).
  * The caller owns which entry is the anchor: the anchor is only knowable from
  * yazi's first `cd` event, so the lock file cannot be the source of truth for it.
  */
@@ -167,10 +163,6 @@ pub fn reclaim_stale(dir: &Path) -> Vec<PathBuf> {
     reclaim_stale_with(dir, pid_alive)
 }
 
-/**
- * Remove lock files left behind by dead sidecars, and only those (A7).
- * An unparseable lock file is stale by definition — nothing can connect through it.
- */
 pub fn reclaim_stale_with(dir: &Path, is_alive: impl Fn(u32) -> bool) -> Vec<PathBuf> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
@@ -192,7 +184,6 @@ pub fn reclaim_stale_with(dir: &Path, is_alive: impl Fn(u32) -> bool) -> Vec<Pat
         let lock: Option<LockFile> = fs::read(&path)
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok());
-        // Live sidecars, including other yazi instances, still own their locks.
         if lock.is_some_and(|lock| is_alive(lock.pid)) {
             continue;
         }
@@ -313,8 +304,6 @@ mod tests {
         assert_eq!(named(Some("   ")), "yazi");
         assert_eq!(named(Some("w41:t6")), "yazi (w41:t6)");
         assert_eq!(named(Some("  w41:t6  ")), "yazi (w41:t6)");
-        // The label comes from YCI_IDE_LABEL alone — the sidecar knows no terminal
-        // and no multiplexer, so a per-pane variable only counts once a user forwards it.
         assert_eq!(
             ide_name_from(|key| (key == "TERM_PROGRAM").then(|| "ghostty".to_owned())),
             "yazi"

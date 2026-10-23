@@ -7,13 +7,10 @@ use serde_json::Value;
 use serde_json::json;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
-/// The kind the plugin publishes the marked set under (H2, H3).
 pub const MARKED_KIND: &str = "claude-marked";
 
-/// The kind the editor publishes its live selection under (I2).
 pub const EDITOR_SELECTION_KIND: &str = "claude-editor-selection";
 
-/// The kind the diff viewer publishes when it exits (J4).
 pub const DIFF_DONE_KIND: &str = "claude-diff-done";
 
 /// `claude-marked` is ours because yazi has no event for marked-set changes (H1);
@@ -62,7 +59,6 @@ pub struct EditorSelection {
 /// per keystroke, and the clarity is worth two allocations.
 pub type EditorSelectionFn = Box<dyn Fn(EditorSelection) + Send>;
 
-/// Carries the token of the `openDiff` whose viewer just exited (J4).
 pub type DiffDoneFn = Box<dyn Fn(String) + Send>;
 
 pub struct StreamHandlers {
@@ -86,7 +82,6 @@ impl Subscription {
         }
     }
 
-    /// Idempotent — stopping twice is not an error.
     pub fn stop(&self) {
         self.stopped.store(true, Ordering::Release);
         if let Some(task) = &self.task {
@@ -112,10 +107,8 @@ pub fn parse_event(line: &str) -> Option<DdsEvent> {
     })
 }
 
-/// What the editor published, or `None` for anything I6 says to drop whole.
 fn selection_of(body: &Map<String, Value>) -> Option<EditorSelection> {
     let number = |key| u32::try_from(body.get(key).and_then(Value::as_u64)?).ok();
-    // Absent is not malformed for the character pair (I4, I6); present-but-junk is.
     let character = |key| match body.get(key) {
         None => Some(0),
         Some(_) => number(key),
@@ -130,8 +123,6 @@ fn selection_of(body: &Map<String, Value>) -> Option<EditorSelection> {
         return None;
     }
     let (char_start, char_end) = (character("charStart")?, character("charEnd")?);
-    // Reversed only means reversed on one line; across lines the end column is
-    // routinely smaller than the start column.
     if line_start == line_end && char_start > char_end {
         return None;
     }
@@ -150,7 +141,6 @@ fn selection_of(body: &Map<String, Value>) -> Option<EditorSelection> {
     })
 }
 
-/// I3 and J4: the body's `yaziId`, not the sender, is what ties a broadcast to us.
 fn claims_yazi(body: &Map<String, Value>, yazi_id: &str) -> bool {
     match body.get("yaziId") {
         Some(Value::String(id)) => id == yazi_id,
@@ -220,7 +210,6 @@ pub fn dispatch(line: &str, yazi_id: &str, handlers: &StreamHandlers) {
     }
 }
 
-/// The spawner `subscribe` uses. Overridable so a test can force a failure.
 pub type Spawner = Box<dyn Fn() -> std::io::Result<tokio::process::Child> + Send>;
 
 pub fn subscribe(yazi_id: &str, handlers: StreamHandlers) -> Subscription {
@@ -243,15 +232,11 @@ pub fn subscribe_with(yazi_id: &str, handlers: StreamHandlers, spawn: Spawner) -
     let mut child = match spawn() {
         Ok(child) => child,
         Err(error) => {
-            // Missing `ya` is normal on machines without yazi; the sidecar must
-            // keep serving its other lifecycle responsibilities.
             eprintln!("failed to subscribe to yazi DDS events: {error}");
             return Subscription::inert();
         }
     };
     let Some(stdout) = child.stdout.take() else {
-        // An injected spawner may omit the pipe; without stdout there is no
-        // stream to read, but the sidecar still must not panic.
         eprintln!("failed to subscribe to yazi DDS events: stdout was not piped");
         return Subscription::inert();
     };
@@ -260,9 +245,6 @@ pub fn subscribe_with(yazi_id: &str, handlers: StreamHandlers, spawn: Spawner) -
     let task_stopped = Arc::clone(&stopped);
     let yazi_id = yazi_id.to_string();
     let task = tokio::spawn(async move {
-        // Language-forced difference: TypeScript hand-rolls a pending buffer for
-        // split chunks. Rust's `BufReader::lines()` owns that concern, with no
-        // observable change to the pure `parse_event` and `dispatch` functions.
         let mut lines = BufReader::new(stdout).lines();
         while !task_stopped.load(Ordering::Acquire) {
             match lines.next_line().await {
@@ -274,8 +256,6 @@ pub fn subscribe_with(yazi_id: &str, handlers: StreamHandlers, spawn: Spawner) -
                 }
                 Ok(None) => break,
                 Err(error) => {
-                    // A broken DDS stream is terminal for this subscription, but
-                    // must not bring down the sidecar.
                     eprintln!("failed to read yazi DDS event: {error}");
                     break;
                 }
@@ -290,7 +270,6 @@ pub fn subscribe_with(yazi_id: &str, handlers: StreamHandlers, spawn: Spawner) -
     }
 }
 
-/// The argv `reveal` spawns, split out so a test can assert on it.
 pub fn reveal_args(yazi_id: &str, file_path: &str) -> Vec<String> {
     vec![
         "emit-to".to_string(),
@@ -300,7 +279,6 @@ pub fn reveal_args(yazi_id: &str, file_path: &str) -> Vec<String> {
     ]
 }
 
-/// Single-quote for `sh`, the only quoting the diff script needs (J3).
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', r"'\''"))
 }
@@ -321,7 +299,6 @@ pub fn diff_script(template: &str, yazi_id: &str, token: &str, old: &str, new: &
     )
 }
 
-/// The argv that hands the script to yazi's own terminal (J3).
 pub fn diff_args(yazi_id: &str, script_path: &str) -> Vec<String> {
     vec![
         "emit-to".to_string(),
@@ -332,7 +309,6 @@ pub fn diff_args(yazi_id: &str, script_path: &str) -> Vec<String> {
     ]
 }
 
-/// J3. `false` when the spawn itself failed, which J7 turns back into `-32601`.
 pub fn open_diff(yazi_id: &str, script_path: &str) -> bool {
     match tokio::process::Command::new("ya")
         .args(diff_args(yazi_id, script_path))
@@ -368,8 +344,6 @@ pub fn reveal(yazi_id: &str, file_path: &str) {
             drop(child);
         }
         Err(error) => {
-            // Log it and move on—don't panic. The F3 answer is sent before the
-            // spawn is known to have succeeded.
             eprintln!("failed to reveal path in yazi: {error}");
         }
     }
@@ -385,8 +359,6 @@ pub async fn probe_alive(yazi_id: &str) -> bool {
         .await
     {
         Ok(status) => status.success(),
-        // Missing `ya` is indistinguishable from a receiver DDS cannot route to;
-        // liveness owns the consecutive-failure tolerance.
         Err(error) => {
             eprintln!("failed to probe yazi liveness: {error}");
             false
@@ -434,8 +406,6 @@ where
 
             failures += 1;
             if failures >= opts.failures_before_gone {
-                // `on_gone` is a local `Option` in the one task that can reach it,
-                // so `take` is the whole at-most-once guarantee.
                 if let Some(on_gone) = on_gone.take() {
                     on_gone();
                 }
@@ -487,21 +457,18 @@ mod tests {
         handlers(calls(), calls(), marks())
     }
 
-    /// Handlers wired so only the hover sink is observable.
     fn hover_probe() -> (Arc<Mutex<Vec<String>>>, StreamHandlers) {
         let hover = calls();
         let handlers = handlers(Arc::clone(&hover), calls(), marks());
         (hover, handlers)
     }
 
-    /// Handlers wired so only the marked sink is observable.
     fn marked_probe() -> (Arc<Mutex<Vec<Vec<String>>>>, StreamHandlers) {
         let marked = marks();
         let handlers = handlers(calls(), calls(), Arc::clone(&marked));
         (marked, handlers)
     }
 
-    /// Handlers wired so only the live-selection sink is observable.
     fn editor_selection_probe() -> (Selections, StreamHandlers) {
         let selections: Selections = Arc::new(Mutex::new(Vec::new()));
         let sink = Arc::clone(&selections);
@@ -597,8 +564,6 @@ mod tests {
 
     #[test]
     fn i6_a_selection_without_text_is_still_delivered() {
-        // I6 lets an editor omit `text` on a selection too big to be worth
-        // sending. That is a range without a line count, not a malformed body.
         let (selections, handlers) = editor_selection_probe();
         dispatch(
             &selection_line(
@@ -616,8 +581,6 @@ mod tests {
 
     #[test]
     fn i4_characters_travel_untouched() {
-        // Lines are 1-based and converted downstream; characters are already
-        // 0-based with an exclusive end and must not be adjusted anywhere.
         let (selections, handlers) = editor_selection_probe();
         dispatch(
             &selection_line(
@@ -649,7 +612,6 @@ mod tests {
 
     #[test]
     fn i6_a_smaller_end_column_across_lines_is_kept() {
-        // Ordinary: line 5 column 40 down to line 9 column 2 is a real selection.
         let (selections, handlers) = editor_selection_probe();
         dispatch(
             &selection_line(
@@ -943,6 +905,22 @@ mod tests {
         tokio::task::yield_now().await;
     }
 
+    #[tokio::test]
+    async fn g2_subscribe_without_piped_stdout_yields_inert_subscription() {
+        let subscription = subscribe_with(
+            "ours",
+            empty_handlers(),
+            Box::new(|| {
+                tokio::process::Command::new("true")
+                    .stdout(Stdio::null())
+                    .kill_on_drop(true)
+                    .spawn()
+            }),
+        );
+        assert!(subscription.task.is_none());
+        subscription.stop();
+    }
+
     #[test]
     fn j3_diff_args_asks_yazi_for_a_blocking_shell() {
         assert_eq!(
@@ -993,7 +971,6 @@ mod tests {
             ..empty_handlers()
         };
 
-        // `ya pub-to` stamps a sender of its own, exactly as I3 describes.
         dispatch(
             r#"claude-diff-done,0,some-other-ya,{"yaziId":"175","token":"cafe"}"#,
             "175",

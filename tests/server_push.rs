@@ -317,12 +317,9 @@ async fn i5_a_live_selection_pushes_a_zero_based_range_and_the_editors_text() {
     let params = &frame["params"];
     assert_eq!(params["filePath"], path);
     assert_eq!(params["fileUrl"], format!("file://{path}"));
-    // The one push where `text` is not empty (I5). It came from the editor's
-    // buffer — C4 still forbids the sidecar reading a file to fill it.
     assert_eq!(params["text"], "one\ntwo");
     assert_eq!(params["selection"]["start"]["line"], 9);
     assert_eq!(params["selection"]["end"]["line"], 19);
-    // I4. Lines drop by one, characters do not move at all.
     assert_eq!(params["selection"]["start"]["character"], 0);
     assert_eq!(params["selection"]["end"]["character"], 37);
     assert_eq!(params["selection"]["isEmpty"], false);
@@ -378,8 +375,6 @@ async fn i6_a_live_selection_without_text_still_pushes_its_range() {
 
 #[tokio::test]
 async fn c4_the_tool_payload_still_refuses_to_carry_text() {
-    // I5 is an exception for one push, not a hole in C4. The tool path answers
-    // for the yazi cursor, which never has contents to offer.
     let server = sidecar().await;
     let path = fixture("Cargo.toml");
     server.set_editor_selection(&path, (10, 20), (0, 37), "one\ntwo");

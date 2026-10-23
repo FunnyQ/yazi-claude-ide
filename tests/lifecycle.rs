@@ -54,6 +54,9 @@ impl Drop for ChildGuard {
     }
 }
 
+const FAST_LIVENESS_EXIT: (&str, &str) = ("100", "2");
+const OUTLIVES_ITS_ASSERTIONS: (&str, &str) = ("2000", "100");
+
 fn spawn_sidecar(config: &Path, yazi_id: &str, wants_liveness_exit: bool) -> ChildGuard {
     spawn_sidecar_labelled(config, yazi_id, wants_liveness_exit, None)
 }
@@ -64,13 +67,10 @@ fn spawn_sidecar_labelled(
     wants_liveness_exit: bool,
     label: Option<&str>,
 ) -> ChildGuard {
-    // Only the liveness test gets fast failure settings. Suite cleanup must not
-    // "simplify" these into one constant or the other seven processes may exit
-    // before their assertions finish.
     let (poll_ms, failures) = if wants_liveness_exit {
-        ("100", "2")
+        FAST_LIVENESS_EXIT
     } else {
-        ("2000", "100")
+        OUTLIVES_ITS_ASSERTIONS
     };
     let mut command = Command::new(env!("CARGO_BIN_EXE_yazi-claude-ide"));
     // README tells users to export YCI_IDE_LABEL, so the developer running the
@@ -96,10 +96,6 @@ fn spawn_sidecar_labelled(
     ChildGuard { child: Some(child) }
 }
 
-/// Stands in for yazi on `PATH`, so the compiled binary's own section J launcher
-/// runs against something. Only the four invocations the sidecar makes are
-/// handled: the DDS subscription, the liveness probe, the blocking shell that
-/// J3 asks for, and the publish the generated script ends with (J4).
 const FAKE_YA: &str = r#"#!/bin/sh
 case "$1" in
 sub)
@@ -194,7 +190,6 @@ fn wait_for_one_lock(config: &Path) -> PathBuf {
     wait_for_lock_count(config, 1).pop().unwrap()
 }
 
-/// Reads through the shipped reader, so the test cannot drift from what ships.
 fn read_lock(path: &Path) -> LockFile {
     lock::read_lock(path.parent().expect("lock directory"), port_from(path))
         .expect("parse lock file")
@@ -313,8 +308,6 @@ fn a1_a3_a5_the_lock_file_the_binary_writes_is_well_formed() {
     );
 }
 
-/// The module test covers `ide_name_from`; only the compiled binary can show
-/// that `main.rs` calls it at all, which is the wiring a unit test cannot reach.
 #[test]
 fn a3_the_binary_takes_its_ide_name_from_yci_ide_label() {
     let temp = TempDir::new().unwrap();
@@ -372,10 +365,6 @@ async fn initialize_and_tools_list_succeed_against_the_running_binary() {
     );
 }
 
-/// The whole of section J through the compiled binary. `server_rpc.rs` hands
-/// `start_sidecar` a closure and `yazi.rs` checks the script it generates; only
-/// the binary owns `launch_diff`, and only this test shows that the copy, the
-/// script, yazi's blocking shell, the publish, and the held answer compose.
 #[tokio::test]
 async fn j1_j8_the_binary_opens_a_diff_and_answers_with_the_file_the_user_left() {
     let temp = TempDir::new().unwrap();
@@ -396,8 +385,6 @@ async fn j1_j8_the_binary_opens_a_diff_and_answers_with_the_file_the_user_left()
         bin.display(),
         std::env::var("PATH").unwrap_or_default()
     );
-    // The user's own file. The sidecar must never read it (C4/J2); the viewer is
-    // the party that reads both sides, and this one only touches `$2`.
     let user_file = temp.path().join("target.txt");
     fs::write(&user_file, "one\ntwo\n").unwrap();
     let tab_name = "✻ [Claude Code] target.txt (5c8bea) ⧉";
@@ -451,7 +438,6 @@ async fn j1_j8_the_binary_opens_a_diff_and_answers_with_the_file_the_user_left()
         .to_string(),
     );
 
-    // J3. What the sidecar asked yazi to run, recorded by the fake `ya`.
     let shell_command = wait_for_file(&shell_command_file).await;
     let script = PathBuf::from(
         shell_command
@@ -462,18 +448,13 @@ async fn j1_j8_the_binary_opens_a_diff_and_answers_with_the_file_the_user_left()
     let dir = script
         .parent()
         .expect("the script sits in its own directory");
-    // J2. The copy keeps the user's file name, and it is the user's file in all
-    // but name — nobody else on the machine may read it.
     let copy = dir.join("target.txt");
     assert_eq!(fs::read_to_string(&copy).unwrap(), "one\nTWO\n");
     assert_eq!(mode_of(&copy), 0o600);
     assert_eq!(mode_of(&script), 0o600);
     assert_eq!(mode_of(dir), 0o700);
-    // J6. Nothing is owed while the viewer is up, and above all no verdict.
     assert!(client.silence(Duration::from_millis(300)).await.is_none());
 
-    // yazi's pane, played by the test: run the script, which runs the user's
-    // template and then publishes J4's completion through the fake `ya`.
     assert!(
         Command::new("sh")
             .arg("-c")
@@ -492,19 +473,15 @@ async fn j1_j8_the_binary_opens_a_diff_and_answers_with_the_file_the_user_left()
         response["result"]["content"][1]["text"],
         "one\nTWO\namended\n"
     );
-    // J1. The user's file is `$1` and the copy is `$2`, in that order.
     assert_eq!(
         fs::read_to_string(&dollar_one_file).unwrap(),
         user_file.to_str().unwrap()
     );
-    // J5. The copy does not outlive the answer.
     assert!(!dir.exists());
-    // J9. `$1` is the user editing their own file; the sidecar reads only `$2`.
     assert_eq!(fs::read_to_string(&user_file).unwrap(), "one\ntwo\n");
 
     signal(&child, libc::SIGTERM);
     let stderr = String::from_utf8_lossy(&child.wait().stderr).into_owned();
-    // J8. The path and the tab name, never the contents — this log lands in /tmp.
     assert!(stderr.contains(&format!(
         "yazi-claude-ide: diff {} ({tab_name})",
         user_file.display()

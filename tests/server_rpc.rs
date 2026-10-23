@@ -80,8 +80,6 @@ async fn e6_requested_subprotocol_is_echoed_in_the_handshake() {
     );
 }
 
-/// The header is optional. A client that asks for no subprotocol MUST NOT be
-/// told it got one.
 #[tokio::test]
 async fn e6_no_subprotocol_is_offered_when_none_was_requested() {
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -238,7 +236,6 @@ async fn stop_closes_an_already_open_connection() {
     assert!(client.call(11, "tools/list", None).await["result"].is_object());
 
     server.stop();
-    // Idempotent: the second stop must not panic on an already-taken shutdown.
     server.stop();
 
     assert!(
@@ -247,8 +244,6 @@ async fn stop_closes_an_already_open_connection() {
     );
 }
 
-/// The stand-in for main.rs's `launch_diff`: writes the copy where J5 will read
-/// it back, and hands the token out so the test can play the part of J4.
 fn viewer(
     token_out: Arc<Mutex<Option<String>>>,
     dir: PathBuf,
@@ -301,11 +296,8 @@ async fn j5_j6_a_held_diff_answers_file_saved_with_the_file_as_it_stands() {
 
     client.raw(&open_diff_request(7, "/tmp/target.txt"));
 
-    // J6. Nothing is owed while the viewer is up — no verdict, and above all not
-    // the DIFF_ACCEPTED that would assert an approval nobody gave.
     assert!(client.silence(Duration::from_millis(300)).await.is_none());
 
-    // The user amends the copy, which is the whole point of J5.
     let copy = dir.join("target.txt");
     assert_eq!(fs::read_to_string(&copy).unwrap(), "one\nTWO\n");
     fs::write(&copy, "one\nTWO\namended\n").unwrap();
@@ -320,8 +312,6 @@ async fn j5_j6_a_held_diff_answers_file_saved_with_the_file_as_it_stands() {
         response["result"]["content"][1]["text"],
         "one\nTWO\namended\n"
     );
-    // J5 again: the copy is the user's file in all but name and does not outlive
-    // the answer.
     assert!(!dir.exists());
 }
 
@@ -355,8 +345,6 @@ async fn j7_a_connection_that_closes_first_takes_its_copy_with_it() {
     let token = token_out.lock().unwrap().clone().expect("viewer ran");
     assert!(dir.join("target.txt").exists());
 
-    // The user closes Claude Code with the viewer still up. Nobody is left to
-    // answer, so the copy of their file must not stay in the temp directory.
     client.close();
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     while dir.exists() {
@@ -367,8 +355,6 @@ async fn j7_a_connection_that_closes_first_takes_its_copy_with_it() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
-    // J7. The publish still arrives when the user quits the viewer; it finds no
-    // pending entry and stops there rather than answering a dead connection.
     sidecar.finish_diff(&token);
     assert!(!dir.exists());
 }

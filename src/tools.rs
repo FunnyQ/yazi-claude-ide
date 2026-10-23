@@ -8,10 +8,6 @@ pub trait ToolContext {
     fn workspace_folders(&self) -> Vec<String>;
     fn reveal(&self, _file_path: &str);
 
-    /// J1-J3. `true` when a viewer was launched and this request is now held for
-    /// J5 to answer; `false` falls through to F5's `-32601`. Defaulted so that a
-    /// context with no viewer — every test context, and the sidecar itself until
-    /// `$YCI_DIFF_CMD` is set — needs to say nothing.
     fn open_diff(&self, _connection: u64, _rpc_id: &Value, _request: DiffRequest<'_>) -> bool {
         false
     }
@@ -31,7 +27,6 @@ pub struct AdvertisedTool {
     pub description: &'static str,
 }
 
-/// The four tools of F1, in the order `tools/list` advertises them.
 pub const ADVERTISED: [AdvertisedTool; 4] = [
     AdvertisedTool {
         name: "getCurrentSelection",
@@ -51,7 +46,6 @@ pub const ADVERTISED: [AdvertisedTool; 4] = [
     },
 ];
 
-/// `ADVERTISED` rendered as the JSON array `tools/list` returns.
 pub fn advertised_json() -> Value {
     Value::Array(
         ADVERTISED
@@ -97,7 +91,6 @@ pub enum SelectionPayload {
     },
 }
 
-/// Every tool result is a JSON string inside a single text block.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ContentBlock {
     #[serde(rename = "type")]
@@ -117,18 +110,12 @@ pub fn exists(file_path: &str) -> bool {
 }
 
 pub fn is_file(file_path: &str) -> bool {
-    // Use stat rather than inspecting the link itself: a symlink to a regular file is a file (B5).
-    // The error catch matters because ENOTDIR, ELOOP, and EACCES must not kill the
-    // sidecar; C5 calls all of them "no active editor" (B5, C5, E5).
     fs::metadata(file_path)
         .map(|metadata| metadata.is_file())
         .unwrap_or(false)
 }
 
 pub fn selection_payload(file_path: Option<&str>) -> SelectionPayload {
-    // The stat catches a focused directory or a path that vanished after focus was
-    // set. Following symlinks lets the target decide whether it is a regular file,
-    // while filePath remains the unresolved path yazi reported (B5, C3-C5).
     match file_path.filter(|path| is_file(path)) {
         Some(file_path) => SelectionPayload::Success {
             success: true,
@@ -187,7 +174,6 @@ pub fn call_tool(
     ctx: &dyn ToolContext,
 ) -> Option<ToolResult> {
     match name {
-        // C1: one payload builder, so both tools cannot drift apart.
         "getCurrentSelection" | "getLatestSelection" => Some(as_text(&json!(selection_payload(
             ctx.focused_file().as_deref()
         )))),
@@ -218,13 +204,10 @@ pub fn call_tool(
                 "rootPath": workspace_folders.first(),
             })))
         }
-        // Yazi has no editor tabs (C6).
         "getOpenEditors" => Some(as_text(&json!({ "tabs": [] }))),
         "closeAllDiffTabs" => Some(as_plain("CLOSED_0_DIFF_TABS")),
         "close_tab" => Some(as_plain("TAB_CLOSED")),
         "getDiagnostics" => Some(as_text(&json!([]))),
-        // F2. Unadvertised, still called. Each answer is the honest one for a file
-        // manager: nothing was open, so nothing was dirty, saved, or diagnosed.
         "checkDocumentDirty" | "saveDocument" => Some(as_text(&json!({
             "success": false,
             "message": format!("Document not open: {}", interpolate(args.get("filePath"))),

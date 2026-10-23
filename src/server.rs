@@ -24,14 +24,12 @@ pub struct StartOptions {
     pub auth_token: String,
 }
 
-/// What the viewer needs to exist, handed to the closure above.
 pub struct DiffLaunch<'a> {
     pub token: &'a str,
     pub old_path: &'a str,
     pub new_contents: &'a str,
 }
 
-/// An `openDiff` whose viewer is up, waiting for J4 to name its token.
 struct PendingDiff {
     token: String,
     rpc_id: Value,
@@ -186,7 +184,6 @@ impl Sidecar {
         }
     }
 
-    /// Idempotent — stopping twice is not an error.
     /// J5. The viewer for `token` has exited: answer its held `openDiff` with the
     /// file as it now stands, then take the copy off disk. An unknown token is
     /// dropped (J4), and so is a connection that closed while the user read (J7).
@@ -265,13 +262,10 @@ impl Inner {
         }
     }
 
-    /// D1-D2. `None` when there is nothing to say: nothing focused, or a path that
-    /// stopped statting since `set_focus` accepted it.
     fn selection_frame(&self) -> Option<String> {
         selection_frame(self.focused().as_deref())
     }
 
-    /// Queue a frame for every open connection. `false` when nobody is listening.
     fn broadcast(&self, frame: String) -> bool {
         let Ok(state) = self.state.lock() else {
             return false;
@@ -285,7 +279,6 @@ impl Inner {
         true
     }
 
-    /// Broadcast a focus change. Silent with nothing new or nobody listening.
     fn push(&self) {
         let Ok(state) = self.state.lock() else {
             return;
@@ -498,7 +491,6 @@ where
                             break;
                         }
                     }
-                    // `Sidecar::stop` dropped this connection's sender.
                     None => {
                         let _ = writer.send(Message::Close(None)).await;
                         break;
