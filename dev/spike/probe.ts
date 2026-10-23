@@ -1,5 +1,4 @@
 #!/usr/bin/env bun
-// Pretends to be Claude, to verify fake-ide's auth + MCP handshake + tools/call.
 // Usage: bun spike/probe.ts            → reads the most recent lock file
 //        bun spike/probe.ts <port>
 import fs from "node:fs";
@@ -45,7 +44,6 @@ check(
 );
 check("transport is ws", lock.transport === "ws");
 
-// A wrong token must be rejected.
 await new Promise<void>((resolve) => {
   const bad = new WebSocket(`ws://127.0.0.1:${port}`, {
     headers: { "x-claude-code-ide-authorization": "0".repeat(32) },
@@ -99,8 +97,6 @@ const list = await call("tools/list");
 const tools = (
   (list.result as { tools?: { name: string }[] })?.tools ?? []
 ).map((t) => t.name);
-// The advertised count varies with SPIKE_MINIMAL_TOOLS, so assert on the four
-// read-only tools the MVP actually depends on rather than on a total.
 const CORE = [
   "getCurrentSelection",
   "getLatestSelection",

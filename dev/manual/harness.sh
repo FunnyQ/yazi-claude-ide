@@ -21,13 +21,9 @@ SOCKET=yaziclaudeide
 SESSION=s
 SANDBOX="$REPO/dev/spike/yazi/sandbox"
 
-# Its own config dir so a real yazi session can never be affected, and its own
-# CLAUDE_CONFIG_DIR so lock files never land in the user's ~/.claude/ide.
 export YAZI_CONFIG_HOME="$HERE/config"
 export CLAUDE_CONFIG_DIR="$HERE/run"
 export YCI_COMMAND="$REPO/target/release/yazi-claude-ide"
-# Deterministic stand-in for nvim, so `Enter` gives us a block opener that stays
-# up and needs no terminal (I11).
 export EDITOR="$HERE/block-opener"
 export YCI_BLOCK_OPENER_LOG="$HERE/run/opened"
 # J1 is opt-in, so the harness passes whatever the caller exported and nothing
@@ -37,7 +33,6 @@ export YCI_DIFF_CMD="${YCI_DIFF_CMD:-}"
 
 tm() { tmux -L "$SOCKET" "$@"; }
 
-# One yazi in its own tmux session. `verify` starts a second one for G4.
 launch() { # session, directory
 	tm new-session -d -s "$1" -x 200 -y 50 \
 		"env YAZI_CONFIG_HOME=$YAZI_CONFIG_HOME CLAUDE_CONFIG_DIR=$CLAUDE_CONFIG_DIR YCI_COMMAND='$YCI_COMMAND' EDITOR='$EDITOR' YCI_BLOCK_OPENER_LOG='$YCI_BLOCK_OPENER_LOG' YCI_DIFF_CMD='$YCI_DIFF_CMD' yazi $2"
@@ -186,7 +181,6 @@ verify)
 	# entry() runs in, so publishing has to happen inside the ya.sync hop. A unit
 	# test cannot see either half.
 	"$0" start >/dev/null
-	# j j lands on one.txt; space marks and steps, so two files end up marked.
 	for k in j j Space Space c v; do tm send-keys -t "$SESSION" "$k"; sleep 0.5; done
 	sleep 1
 	if grep -q 'marked 2 file(s)' "$LOGS"/*.log; then

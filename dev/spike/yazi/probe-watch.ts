@@ -1,7 +1,4 @@
-// Polls several yazi ids with the sidecar's own liveness probe and prints every
-// transition, so the succession spike measures the exact call src/yazi.ts makes
-// rather than an approximation of it. TMPDIR is inherited, which is what aims
-// `ya` at the private DDS.
+// TMPDIR is inherited, which is what aims `ya` at the private DDS.
 //
 //   bun probe-watch.ts <id> [<id> …] <seconds>
 import { probeAlive } from "../../../src/yazi.ts";

@@ -58,7 +58,6 @@ sub)
 stop)
 	tm kill-server 2>/dev/null || true
 	pkill -f 'ya sub' 2>/dev/null || true
-	# Only kills workers this harness created; matches on the spike log paths.
 	pkill -f 'yazi-spike-.*\.log' 2>/dev/null || true
 	rm -f /tmp/yazi-spike-*
 	echo "stopped"

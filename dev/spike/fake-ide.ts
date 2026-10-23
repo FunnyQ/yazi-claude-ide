@@ -15,8 +15,6 @@ const IDE_DIR = path.join(
 );
 
 const authToken = randomBytes(16).toString("hex");
-// Several dirs may be passed so the workspace-policy spike can test whether
-// Claude matches any entry in workspaceFolders or only the first.
 const workspaces =
   process.argv.length > 2
     ? process.argv.slice(2).map((d) => path.resolve(d))
@@ -66,8 +64,6 @@ let logStream: fs.WriteStream | null = null;
 const START = Date.now();
 
 function log(dir: "in" | "out", msg: unknown): void {
-  // `t` is milliseconds since startup. The openDiff experiment measures how long
-  // the CLI waits for an answer, and that is unreadable from an untimed log.
   const line = JSON.stringify({ t: Date.now() - START, dir, msg })
     .replaceAll(authToken, "<TOKEN>")
     .replaceAll(homedir(), "~");
@@ -87,8 +83,6 @@ function selectionPayload(): SelectionPayload {
   const state = readState();
   if (!state.filePath)
     return { success: false, message: "No active editor found" };
-  // This is the spike's independent variable: `text` is deliberately left empty
-  // so that the path is the only thing we hand over.
   return {
     success: true,
     filePath: state.filePath,
@@ -204,9 +198,6 @@ const TOOLS = [
   },
 ];
 
-// Isolation experiment: with SPIKE_MINIMAL_TOOLS=1, advertise only the first
-// four read-only tools. `tools/call` behaviour is untouched — the only variable
-// is what `tools/list` returns.
 const ADVERTISED = process.env.SPIKE_MINIMAL_TOOLS ? TOOLS.slice(0, 4) : TOOLS;
 
 const asText = (obj: unknown) => ({
@@ -236,8 +227,6 @@ const [OPEN_DIFF_MODE, OPEN_DIFF_DELAY] = (
 ).split(":");
 const SAVED_MARKER = `SPIKE_EDIT_${randomBytes(3).toString("hex")}`;
 
-// When the pending openDiff was received, so the close_tab that follows can be
-// reported as an interval rather than a timestamp.
 let openDiffAt = 0;
 
 function openDiffResult(args?: Record<string, unknown>) {
@@ -268,7 +257,6 @@ function openDiffResult(args?: Record<string, unknown>) {
   }
 }
 
-/** True when this openDiff was handled here and must not fall through. */
 function answerOpenDiff(
   id: string | number,
   args?: Record<string, unknown>,
@@ -291,7 +279,6 @@ function answerOpenDiff(
   return true;
 }
 
-// Unknown tools return null; the caller turns that into a JSON-RPC error and logs it.
 function callTool(name: string | undefined, args?: Record<string, unknown>) {
   switch (name) {
     case "getCurrentSelection":
@@ -311,8 +298,6 @@ function callTool(name: string | undefined, args?: Record<string, unknown>) {
       });
     case "getDiagnostics":
       return asText([]); // yazi has no LSP, so this is always empty
-    // Honest stubs below: yazi is not an editor and cannot do these things, but
-    // the CLI still needs to see that the tools exist.
     case "closeAllDiffTabs":
       return { content: [{ type: "text", text: "CLOSED_0_DIFF_TABS" }] };
     case "close_tab":
@@ -363,21 +348,11 @@ function pushSelection(): void {
   });
 }
 
-// What was mentioned last, so an unrelated edit to state.json does not resend
-// the same set. An empty `mentions` clears it, which is how the same set can be
-// pushed twice in one session.
 let lastMentions = "";
 
-/**
- * One `at_mentioned` per marked file, sent in the order state.json lists them.
- * A marked file in a file manager has no range, so the range is whatever
- * `mentionRange` says and omitted when it says nothing.
- */
 function pushMentions(): void {
   const state = readState();
   const mentions = state.mentions ?? [];
-  // The range is part of the key: re-sending the same files with a different
-  // range is a distinct probe, not a repeat.
   const key = JSON.stringify([mentions, state.mentionRange ?? null]);
   if (!socket || key === lastMentions) return;
   lastMentions = key;
@@ -514,8 +489,6 @@ console.error(
     (OPEN_DIFF_MODE === "saved" ? ` · marker ${SAVED_MARKER}` : ""),
 );
 
-// Any edit to state.json pushes a selection_changed notification, and any
-// change to `mentions` pushes one at_mentioned per marked file.
 fs.watchFile(STATE_FILE, { interval: 300 }, () => {
   pushSelection();
   pushMentions();

@@ -1,6 +1,4 @@
 #!/usr/bin/env bun
-// Pretends to be Claude Code for exactly one `openDiff`, so section J can be
-// driven against a real sidecar without an interactive Claude session.
 // Usage: bun spike/diff-client.ts <ide-lock-dir> <file-to-diff>
 import fs from "node:fs";
 import path from "node:path";

@@ -106,7 +106,6 @@ start_three() {
 	echo "  ids      : a=$ID_A b=$ID_B c=$ID_C"
 }
 
-# Polls with the sidecar's own probe, so the spike measures the real call.
 watch() { bun "$HERE/probe-watch.ts" "$@"; }
 
 case "${1:-}" in
